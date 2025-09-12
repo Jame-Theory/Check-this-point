@@ -5,7 +5,6 @@
   "description": "Fill inputs and custom div-based selects with one click or hotkey.",
   "permissions": ["storage", "scripting", "activeTab", "contextMenus"],
   "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "src/background.js" },
   "action": {
     "default_title": "Run Auto-Fill",
     "default_popup": "src/popup.html",
