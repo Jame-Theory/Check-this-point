@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Check That Ho",
+  "version": "1.1.0",
+  "description": "Fill inputs and custom div-based selects with one click or hotkey.",
+  "permissions": ["storage", "scripting", "activeTab", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "src/background.js" },
+  "action": {
+    "default_title": "Run Auto-Fill",
+    "default_popup": "src/popup.html",
+    "default_icon": "src/kanyeicide.jpg"
+  },
+  "options_page": "src/options.html",
+  "commands": {
+    "run-fill": {
+      "suggested_key": { "default": "Alt+Shift+F" },
+      "description": "Run the auto-fill on the current tab"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
