@@ -4,46 +4,70 @@
   <meta charset="utf-8" />
   <title>Quick Fill</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 12px; min-width: 320px; }
+    body { font-family: system-ui, sans-serif; margin: 12px; min-width: 340px; }
     label { display: block; margin: 8px 0 4px; font-weight: 600; }
-    input[type="text"] { width: 100%; padding: 6px; }
+    input[type="text"], input[type="date"] { width: 100%; padding: 6px; }
     textarea { width: 100%; height: 68px; padding: 6px; }
     .row { display: flex; gap: 8px; margin-top: 6px; }
+    .row > * { flex: 1; }
     button { padding: 6px 10px; }
     .muted { color: #666; font-size: 12px; }
     .inline { display: inline-flex; align-items: center; gap: 6px; }
+    .section { margin-top: 10px; padding-top: 6px; border-top: 1px solid #eee; }
   </style>
 </head>
 <body>
+  <!-- Preferences -->
   <div>
     <div class="inline">
       <input id="autoMyName" type="checkbox" />
       <label for="autoMyName" style="margin:0;">Always select my name on load</label>
     </div>
     <div class="row" style="margin-top:8px;">
-      <input id="myName" type="text" placeholder="Your name as it appears (e.g., Caporuscio, James)" />
-      <button id="savePrefs">Save</button>
+      <input id="myName" type="text" placeholder="Your name (e.g., Caporuscio, James)" />
+      <button id="savePrefs" style="flex:0 0 auto;">Save</button>
     </div>
   </div>
 
-  <label>Pick a name now</label>
-  <div class="row">
-    <input id="pickName" type="text" placeholder="Type a name to select (e.g., Caporuscio, James)" />
-    <button id="runPickName">Pick</button>
+  <!-- Pick name now -->
+  <div class="section">
+    <label>Pick a name now</label>
+    <div class="row">
+      <input id="pickName" type="text" placeholder="Type a name" />
+      <button id="runPickName" style="flex:0 0 auto;">Pick</button>
+    </div>
   </div>
 
-  <label>Fill 1–4 dropdowns in order</label>
-  <textarea id="sequence" placeholder="Example: 4 4 3 2 1 1 2 3 4"></textarea>
-  <div class="row">
-    <button id="runSeq">Fill Sequence</button>
-    <button id="clearSeq">Clear</button>
+  <!-- Sequence -->
+  <div class="section">
+    <label>Fill 1–4 dropdowns in order</label>
+    <textarea id="sequence" placeholder="Example: 4 4 3 2 1 1 2 3 4"></textarea>
+    <div class="row">
+      <button id="runSeq">Fill Sequence</button>
+      <button id="clearSeq" style="flex:0 0 auto;">Clear</button>
+    </div>
+    <p class="muted">Scans all selects whose options are only 1–4 and fills them in order.</p>
   </div>
-  <p class="muted">We’ll scan all selects whose options are only 1–4 and fill them in page order.</p>
 
-  <div class="row">
-    <button id="saveForm">Save on Page</button>
+  <!-- Dates -->
+  <div class="section">
+    <label>Date (From / To)</label>
+    <div class="row">
+      <input id="dateFrom" type="date" />
+      <input id="dateTo" type="date" />
+    </div>
+    <div class="row">
+      <button id="setDate">Set Date</button>
+    </div>
   </div>
 
+  <!-- Page actions -->
+  <div class="section">
+    <div class="row">
+      <button id="saveForm">Save on Page</button>
+    </div>
+    <p class="muted">Residence auto-sets to <b>Hadley Village</b> on page load.</p>
+  </div>
 
   <script src="popup.js"></script>
 </body>
