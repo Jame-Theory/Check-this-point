@@ -247,15 +247,30 @@ function populateResident({ id, text }) {
 // Prevent overlapping resident lookups
 let residentBusy = false;
 async function setResidentByName(query) {
-  if (!query || !query.trim()) return { ok: false, reason: "empty_query" };
+  if (!query || !query.trim()) {
+    console.warn("[CTH/resident] Empty query");
+    return { ok: false, reason: "empty_query" };
+  }
   while (residentBusy) await sleep(50);
   residentBusy = true;
-  try {
-    // Ensure the question exists so hidden inputs are present
-    try { await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 }); } catch {}
-    clearResidentUI();
 
-    // Try a few variants to maximize matches
+  console.log("[CTH/resident] === Starting resident lookup ===");
+  console.log("[CTH/resident] Raw query:", query);
+
+  try {
+    // Ensure hidden inputs exist
+    try {
+      await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 });
+      console.log("[CTH/resident] Hidden resident input is present");
+    } catch {
+      console.warn("[CTH/resident] Hidden resident input not found after timeout");
+    }
+
+    // Clear stale selection
+    clearResidentUI();
+    console.log("[CTH/resident] Cleared old resident selection");
+
+    // Build query variants
     const variants = (() => {
       const q = query.trim();
       if (q.includes(",")) {
@@ -272,27 +287,53 @@ async function setResidentByName(query) {
         return [q];
       }
     })();
+    console.log("[CTH/resident] Query variants:", variants);
 
     let best = null;
     for (const v of variants) {
+      console.log("[CTH/resident] Trying variant:", v);
       const results = await fetchStudentResults(v);
-      if (results.length) { best = pickBest(results, v); break; }
+      console.log("[CTH/resident] API results for", v, ":", results);
+      if (results.length) {
+        best = pickBest(results, v);
+        console.log("[CTH/resident] Picked best match:", best);
+        break;
+      }
     }
-    if (!best) return { ok: false, reason: "no_results" };
+
+    if (!best) {
+      console.warn("[CTH/resident] No results for any variant");
+      return { ok: false, reason: "no_results" };
+    }
 
     const ok = populateResident(best);
+    console.log("[CTH/resident] Populated resident fields:", ok);
+
     if (!ok) return { ok: false, reason: "populate_failed" };
 
-    // Verify after a short settle (DOM replacements)
+    // Verify after short settle
     await sleep(150);
     const hid = residentHiddenId();
     const flag = residentSelectedFlag();
     const verified = !!(hid && hid.value === String(best.id) && (!flag || flag.value === "1"));
-    return verified ? { ok: true, id: best.id, label: best.text } : { ok: false, reason: "verify_failed" };
+
+    console.log("[CTH/resident] Verification check:", {
+      hiddenValue: hid?.value,
+      flagValue: flag?.value,
+      expectedId: best.id,
+      verified
+    });
+
+    return verified
+      ? { ok: true, id: best.id, label: best.text }
+      : { ok: false, reason: "verify_failed" };
+
   } finally {
+    console.log("[CTH/resident] === Done resident lookup ===");
     residentBusy = false;
   }
 }
+
 
 // ---------- your other features ----------
 async function pickMyNameIfEnabled() {
