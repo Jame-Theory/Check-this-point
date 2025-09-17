@@ -10,7 +10,6 @@
     "default_popup": "src/popup.html",
     "default_icon": "src/kanyeicide.jpg"
   },
-  "options_page": "src/options.html",
   "commands": {
     "run-fill": {
       "suggested_key": { "default": "Alt+Shift+F" },

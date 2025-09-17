@@ -1,33 +1,78 @@
-// List of YouTube recommendation elements to hide
-const selectorsToHide = [
-  '#related', // Sidebar related videos
-  'ytd-watch-next-secondary-results-renderer', // Suggested videos below main
-  'ytd-compact-autoplay-renderer', // Autoplay up next
-  'ytp-endscreen-content', // Endscreen suggestions
-  'ytd-rich-grid-renderer', // Home page video grid
-  'a#endpoint[title="Shorts"]',
-  'ytp-endscreen-content',
-];
+// Utility: shortcut for getElementById
+const $ = (id) => document.getElementById(id);
 
-function hideRecommendations() {
-  selectorsToHide.forEach(selector => {
-    const elements = document.querySelectorAll(selector);
-    elements.forEach(el => {
-      el.style.display = 'none';
-    });
-  });
-    if (location.pathname.startsWith('/shorts')) {
-    window.location.href = 'https://www.youtube.com';
+console.log("[CTH] popup.js loaded");
+
+// Get the active tab ID
+async function getActiveTabId() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  console.log("[CTH] Active tab:", tab);
+  return tab?.id;
+}
+
+// Send a message to the active tab
+async function sendToTab(msg) {
+  const tabId = await getActiveTabId();
+  if (!tabId) {
+    console.warn("[CTH] No active tab found. Message not sent:", msg);
+    return;
+  }
+  console.log("[CTH] Sending message to tab", tabId, ":", msg);
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, msg);
+    console.log("[CTH] Got response from content script:", response);
+  } catch (err) {
+    console.error("[CTH] Error sending message:", err);
   }
 }
 
-hideRecommendations();
+// Init: load saved preferences
+(async function init() {
+  console.log("[CTH] Initializing popup…");
+  try {
+    const { myName = "Caporuscio, James", autoMyName = true } =
+      await chrome.storage.sync.get({
+        myName: "Caporuscio, James",
+        autoMyName: true
+      });
 
-const observer = new MutationObserver(() => {
-  hideRecommendations();
+    console.log("[CTH] Loaded prefs:", { myName, autoMyName });
+
+    if ($("myName")) $("myName").value = myName;
+    if ($("autoMyName")) $("autoMyName").checked = autoMyName;
+  } catch (err) {
+    console.error("[CTH] Error loading prefs:", err);
+  }
+})();
+
+// Save preferences button
+$("savePrefs")?.addEventListener("click", async () => {
+  const newPrefs = {
+    myName: $("myName")?.value.trim(),
+    autoMyName: $("autoMyName")?.checked
+  };
+  console.log("[CTH] Saving prefs:", newPrefs);
+  await chrome.storage.sync.set(newPrefs);
 });
 
-observer.observe(document.body, {
-  childList: true,
-  subtree: true,
+// Run “pick name” button
+$("runPickName")?.addEventListener("click", async () => {
+  const name = $("pickName")?.value.trim();
+  console.log("[CTH] runPickName clicked. Name:", name);
+  if (!name) return;
+  await sendToTab({ type: "PICK_NAME", name });
+});
+
+// Run “sequence” button
+$("runSeq")?.addEventListener("click", async () => {
+  const seq = $("sequence")?.value;
+  console.log("[CTH] runSeq clicked. Sequence:", seq);
+  if (!seq) return;
+  await sendToTab({ type: "FILL_SEQUENCE", seq });
+});
+
+// Clear sequence box
+$("clearSeq")?.addEventListener("click", () => {
+  console.log("[CTH] clearSeq clicked");
+  if ($("sequence")) $("sequence").value = "";
 });

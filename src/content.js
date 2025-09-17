@@ -1,13 +1,21 @@
+// ========== DEBUG LOADED ==========
+console.log("[CTH/content] content.js loaded");
+
 // ---------- helpers for selects ----------
 function dispatchSelectEvents(sel) {
+  console.log("[CTH/content] dispatching events for", sel);
   sel.dispatchEvent(new Event("input", { bubbles: true }));
   sel.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function selectOptionByText(selectEl, targetText) {
-  const t = targetText.trim().toLowerCase();
-  const opts = Array.from(selectEl.options);
+  const t = (targetText || "").trim().toLowerCase();
+  const opts = Array.from(selectEl?.options || []);
   const found = opts.find(o => (o.textContent || o.label || "").trim().toLowerCase() === t);
+  console.log(
+    "[CTH/content] selectOptionByText:",
+    { targetText, found: !!found, selectEl, optionsCount: opts.length }
+  );
   if (!found) return false;
   selectEl.value = found.value;
   dispatchSelectEvents(selectEl);
@@ -15,86 +23,105 @@ function selectOptionByText(selectEl, targetText) {
 }
 
 function looksLikePeopleSelect(sel) {
-  // Heuristic: many options AND lots with a comma (Last, First) OR id-ish numeric values
   const opts = Array.from(sel.options);
   if (opts.length < 5) return false;
   const hasCommaNames = opts.filter(o => (o.textContent || "").includes(",")).length >= 3;
-  const hasDashSelect = opts.some(o => o.textContent?.includes("- select"));
+  const hasDashSelect = opts.some(o => (o.textContent || "").includes("- select"));
   return hasCommaNames || hasDashSelect;
 }
 
 function getParaProSelects() {
-  // Specific to your form — also keep it generic
-  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro field in your HTML
+  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro
   const all = Array.from(document.querySelectorAll("select"));
   const peopleish = all.filter(looksLikePeopleSelect);
   const set = new Set([...byName, ...peopleish]);
-  return Array.from(set);
+  const result = Array.from(set);
+  console.log("[CTH/content] getParaProSelects ->", { byName: byName.length, peopleish: peopleish.length, total: result.length });
+  return result;
 }
 
 function getOneToFourSelects() {
-  // Finds selects whose *visible* option texts are exclusively subset of {1,2,3,4}
   const ok = [];
   document.querySelectorAll("select").forEach(sel => {
     const texts = new Set(Array.from(sel.options).map(o => (o.textContent || "").trim()));
-    // Remove blanks like "- select one -"
     const cleaned = new Set([...texts].filter(t => t && !t.startsWith("- select")));
     const allowed = new Set(["1","2","3","4"]);
-    if (cleaned.size > 0 && [...cleaned].every(t => allowed.has(t))) {
-      ok.push(sel);
-    }
+    if (cleaned.size > 0 && [...cleaned].every(t => allowed.has(t))) ok.push(sel);
   });
+  console.log("[CTH/content] getOneToFourSelects ->", ok.length, "select(s)");
   return ok;
 }
 
 // ---------- features ----------
 async function pickMyNameIfEnabled() {
-  const { myName = "Caporuscio, James", autoMyName = true } = await chrome.storage.sync.get({
-    myName: "Caporuscio, James",
-    autoMyName: true
-  });
-  if (!autoMyName) return;
+  try {
+    const { myName = "Caporuscio, James", autoMyName = true } =
+      await chrome.storage.sync.get({ myName: "Caporuscio, James", autoMyName: true });
 
-  const sels = getParaProSelects();
-  for (const sel of sels) {
-    if (sel.value) continue; // already set
-    if (selectOptionByText(sel, myName)) break;
+    console.log("[CTH/content] pickMyNameIfEnabled:", { myName, autoMyName });
+    if (!autoMyName) return;
+
+    const sels = getParaProSelects();
+    for (const sel of sels) {
+      if (sel.value) {
+        console.log("[CTH/content] skip (already set):", sel);
+        continue;
+      }
+      if (selectOptionByText(sel, myName)) {
+        console.log("[CTH/content] selected myName on", sel);
+        break;
+      }
+    }
+  } catch (e) {
+    console.error("[CTH/content] pickMyNameIfEnabled error:", e);
   }
 }
 
 function pickNameNow(name) {
+  console.log("[CTH/content] pickNameNow:", name);
   const sels = getParaProSelects();
   for (const sel of sels) {
-    if (selectOptionByText(sel, name)) return true;
+    if (selectOptionByText(sel, name)) {
+      console.log("[CTH/content] picked name on", sel);
+      return true;
+    }
   }
+  console.warn("[CTH/content] name not found in any select:", name);
   return false;
 }
 
 function parseSequence(seqStr) {
-  // Accepts "4 4 3 2 1", "44321", "4,3,2,1", etc.
-  const digits = Array.from(seqStr).filter(ch => /[1-4]/.test(ch)).map(d => Number(d));
+  const digits = Array.from(seqStr || "").filter(ch => /[1-4]/.test(ch)).map(d => Number(d));
+  console.log("[CTH/content] parseSequence:", { seqStr, digits });
   return digits;
 }
 
 function fillSequence(seqStr) {
   const nums = parseSequence(seqStr);
-  if (!nums.length) return { filled: 0, total: 0 };
+  if (!nums.length) {
+    console.warn("[CTH/content] fillSequence: no digits 1-4 found");
+    return { filled: 0, total: 0 };
+  }
 
   const selects = getOneToFourSelects();
   let filled = 0;
 
   for (let i = 0; i < selects.length && i < nums.length; i++) {
     const sel = selects[i];
-    const want = String(nums[i]); // "1"-"4" matches visible text
-    // Find option whose *text* equals want, then set its value
+    const want = String(nums[i]); // "1".."4"
     const opt = Array.from(sel.options).find(o => (o.textContent || "").trim() === want);
     if (opt) {
       sel.value = opt.value;
       dispatchSelectEvents(sel);
       filled++;
+      console.log("[CTH/content] set select", i, "to", want);
+    } else {
+      console.warn("[CTH/content] no option with text", want, "at select index", i);
     }
   }
-  return { filled, total: Math.min(selects.length, nums.length) };
+  const res = { filled, total: Math.min(selects.length, nums.length) };
+  console.log("[CTH/content] fillSequence result:", res);
+  return res;
 }
 
 // ---------- boot + listeners ----------
@@ -102,20 +129,32 @@ let booted = false;
 async function bootOnce() {
   if (booted) return;
   booted = true;
-  // slight delay so the form renders
+  console.log("[CTH/content] bootOnce");
   setTimeout(pickMyNameIfEnabled, 250);
 }
 bootOnce();
 
+// IMPORTANT: Always reply synchronously (sendResponse + return false)
+// unless you truly plan to reply later (then return true and call sendResponse later).
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  console.log("[CTH/content] onMessage:", msg);
+
   if (msg?.type === "PICK_NAME") {
     const ok = pickNameNow(msg.name);
     sendResponse?.({ ok });
+    return false; // responded now
+
   } else if (msg?.type === "FILL_SEQUENCE") {
     const res = fillSequence(msg.seq);
     sendResponse?.(res);
+    return false; // responded now
+
   } else if (msg?.type === "RUN_FILL") {
-    // keep your previous handler; optionally also re-apply my-name
     pickMyNameIfEnabled();
+    sendResponse?.({ ok: true });
+    return false; // responded now
   }
+
+  // No matching handler: don't claim async
+  return false;
 });
