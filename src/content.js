@@ -1,23 +1,23 @@
 // ========== DEBUG ==========
 console.log("[CTH/content] loaded");
 
-// ---------- event helpers ----------
-function fire(el, type) {
-  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
-}
-function dispatchSelectEvents(el) {
-  fire(el, "input");
-  fire(el, "change");
-}
-function dispatchInputChange(el) {
-  fire(el, "input");
-  fire(el, "change");
-}
-function key(el, type, key, code) {
-  el.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true }));
-}
+// ---------- tiny event utils ----------
+const fire = (el, type, opts = {}) =>
+  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...opts }));
+const key = (el, type, k, code = k) =>
+  el.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true }));
+const clickLikeHuman = (el) => {
+  const r = el.getBoundingClientRect();
+  const cx = r.left + Math.min(5, Math.max(1, r.width / 2));
+  const cy = r.top + Math.min(5, Math.max(1, r.height / 2));
+  for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+    el.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: cx, clientY: cy }));
+  }
+};
+const dispatchChange = (el) => { fire(el, "input"); fire(el, "change"); };
 
-// ---------- people-select helpers (ParaPro) ----------
+// ---------- helpers you already use ----------
+function dispatchSelectEvents(el) { dispatchChange(el); }
 function selectOptionByText(selectEl, targetText) {
   const t = (targetText || "").trim().toLowerCase();
   const opts = Array.from(selectEl?.options || []);
@@ -35,11 +35,10 @@ function looksLikePeopleSelect(sel) {
   return hasCommaNames || hasDashSelect;
 }
 function getParaProSelects() {
-  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro field
+  const byName = document.querySelectorAll('select[name$="[1820][data]"]');
   const all = Array.from(document.querySelectorAll("select"));
   const peopleish = all.filter(looksLikePeopleSelect);
-  const set = new Set([...byName, ...peopleish]);
-  return Array.from(set);
+  return Array.from(new Set([...byName, ...peopleish]));
 }
 function getOneToFourSelects() {
   const ok = [];
@@ -52,78 +51,89 @@ function getOneToFourSelects() {
   return ok;
 }
 
-// ---------- Residence + Dates ----------
-const HADLEY_ENTITY_ID = "1748"; // Hadley Village
+// ---------- Residence: make it STICK to Hadley ----------
+const HADLEY_ENTITY_ID = "1748";
 
-function setResidenceHadley() {
-  const radio =
+function findHadleyRadio() {
+  return (
     document.querySelector(`input[type="radio"][name="answers[gensec][location]"][value="${HADLEY_ENTITY_ID}"]`) ||
     Array.from(document.querySelectorAll('input[type="radio"][name="answers[gensec][location]"]'))
-      .find(r => (r.value === HADLEY_ENTITY_ID || /hadley\s+village/i.test(r.closest("label")?.textContent || "")));
-
-  if (!radio) {
-    console.warn("[CTH/content] Hadley radio not found");
-    return false;
-  }
-  if (!radio.checked) {
-    radio.checked = true;
-    dispatchInputChange(radio);
-  }
-  console.log("[CTH/content] Residence set to Hadley Village");
-  return true;
+      .find(r => r.value === HADLEY_ENTITY_ID || /hadley\s+village/i.test(r.closest("label")?.textContent || ""))
+  );
 }
 
+function forceSelectHadley() {
+  const radio = findHadleyRadio();
+  if (!radio) return false;
+
+  const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label") || radio;
+  if (!radio.checked) {
+    label.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    clickLikeHuman(label); // trigger their handlers
+  }
+  // Some UIs need an explicit change after click
+  if (!radio.checked) {
+    radio.checked = true;
+    dispatchChange(radio);
+  }
+  return radio.checked;
+}
+
+// keep trying for a few seconds and also on DOM mutations
+function stickyHadley(seconds = 6) {
+  const end = Date.now() + seconds * 1000;
+  let stableMs = 0;
+  const trySet = () => {
+    const ok = forceSelectHadley();
+    if (ok) stableMs += 200;
+    if (Date.now() < end && stableMs < 1200) setTimeout(trySet, 200);
+  };
+  trySet();
+
+  // Re-apply if radios re-render
+  const mo = new MutationObserver(() => {
+    const r = findHadleyRadio();
+    if (!r || !r.checked) forceSelectHadley();
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+  // stop after some time to avoid infinite observing
+  setTimeout(() => mo.disconnect(), seconds * 1000);
+}
+
+// ---------- Dates ----------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
-
   let ok = true;
 
   if (from) {
-    try {
-      from.value = fromISO;
-      if ("valueAsDate" in from) {
-        const d = new Date(fromISO + "T00:00:00");
-        if (!isNaN(d)) from.valueAsDate = d;
-      }
-      dispatchInputChange(from);
-    } catch { ok = false; }
-  } else {
-    console.warn("[CTH/content] From date input not found");
-    ok = false;
-  }
+    from.value = fromISO;
+    if ("valueAsDate" in from) { const d = new Date(fromISO + "T00:00:00"); if (!isNaN(d)) from.valueAsDate = d; }
+    dispatchChange(from);
+  } else { ok = false; }
 
   if (to) {
-    try {
-      to.value = toISO;
-      if ("valueAsDate" in to) {
-        const d2 = new Date(toISO + "T00:00:00");
-        if (!isNaN(d2)) to.valueAsDate = d2;
-      }
-      dispatchInputChange(to);
-    } catch { ok = false; }
-  } else {
-    console.warn("[CTH/content] To date input not found");
-    ok = false;
-  }
+    to.value = toISO;
+    if ("valueAsDate" in to) { const d2 = new Date(toISO + "T00:00:00"); if (!isNaN(d2)) to.valueAsDate = d2; }
+    dispatchChange(to);
+  } else { ok = false; }
 
-  console.log("[CTH/content] setDateRangeISO", { fromISO, toISO, ok });
   return ok;
 }
 
 // ---------- NEW: Resident Name autocomplete ----------
 function findResidentInput() {
-  // Specific name from the page structure + accessible fallbacks
+  // Most specific first, then ARIA/placeholder fallbacks
   return (
-    document.querySelector('input[name$="[1769][data]"]') || // exact StudentQuestion input
+    document.querySelector('input[name$="[1769][data]"]') ||         // StudentQuestion text input
     document.querySelector('#questions_new270026921_1769_data input[type="text"]') ||
-    document.querySelector('input[aria-label*="Resident" i]') ||
+    document.querySelector('input[role="combobox"][aria-label*="Resident" i]') ||
     document.querySelector('input[placeholder*="Resident" i]') ||
+    document.querySelector('input[aria-label*="Student" i]') ||
     null
   );
 }
 
-// common option containers used by various autocompletes (jQuery UI, ARIA, custom)
 const RES_OPT_QUERIES = [
   'ul[role="listbox"] li[role="option"]',
   'ul[role="listbox"] li',
@@ -132,65 +142,65 @@ const RES_OPT_QUERIES = [
   '.tt-menu .tt-suggestion',
   '.dropdown-menu li',
   '[role="option"]',
-  '.autocomplete-suggestion',
+  '.autocomplete-suggestion'
 ];
+const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
 
-function queryAll(sel) { return Array.from(document.querySelectorAll(sel)); }
-
-function getResidentOptions() {
+function visibleOptions() {
   for (const q of RES_OPT_QUERIES) {
-    const items = queryAll(q).filter(el => el.offsetParent !== null);
+    const items = Array.from(document.querySelectorAll(q)).filter(el => el.offsetParent !== null);
     if (items.length) return items;
   }
   return [];
 }
 
-function normalize(s) { return (s || "").trim().replace(/\s+/g, " ").toLowerCase(); }
+// Tip for the user in case it helps:
+const NAME_TIP = "Use 'Last, First' (e.g., 'Doe, Jane'). Partial last name works too.";
 
-// Type into the resident input, wait for list, choose a match
-async function setResidentName(name, timeoutMs = 3000) {
+// Type query, wait for list, click best match
+async function setResidentName(query, timeoutMs = 4000) {
   const input = findResidentInput();
   if (!input) {
     console.warn("[CTH/content] Resident input not found");
-    return false;
+    return { ok: false, reason: "input_not_found", tip: NAME_TIP };
   }
 
-  // focus + type
+  // Focus and type the query
   input.focus();
-  input.value = name;
-  dispatchInputChange(input);
-  key(input, "keydown", "a", "KeyA");
-  key(input, "keyup", "a", "KeyA");
+  input.value = query;
+  dispatchChange(input);
+  key(input, "keydown", "a", "KeyA"); key(input, "keyup", "a", "KeyA"); // wake listeners
 
-  const want = normalize(name);
-
+  const want = normalize(query);
   const start = performance.now();
+
   while (performance.now() - start < timeoutMs) {
-    const items = getResidentOptions();
+    const items = visibleOptions();
     if (items.length) {
-      // Try exact (case-insensitive) text match first
-      let choice = items.find(li => normalize(li.textContent) === want)
-              || items.find(li => normalize(li.textContent).includes(want))
-              || items[0];
+      // exact (case-insensitive) → startsWith → contains → first
+      let choice =
+        items.find(li => normalize(li.textContent) === want) ||
+        items.find(li => normalize(li.textContent).startsWith(want)) ||
+        items.find(li => normalize(li.textContent).includes(want)) ||
+        items[0];
 
       if (choice) {
-        choice.click(); // most autocompletes accept click
-        // also try keyboard confirm (for components that require it)
+        choice.scrollIntoView({ block: "center", inline: "nearest" });
+        clickLikeHuman(choice);
+        // confirm for combobox components that want Enter on input
         key(input, "keydown", "Enter", "Enter");
         key(input, "keyup", "Enter", "Enter");
-        dispatchInputChange(input);
-        console.log("[CTH/content] Resident selected:", choice.textContent?.trim());
-        return true;
+        dispatchChange(input);
+        return { ok: true, chosen: (choice.textContent || "").trim() };
       }
     }
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 120));
   }
 
-  console.warn("[CTH/content] No resident suggestions appeared for:", name);
-  return false;
+  return { ok: false, reason: "no_suggestions", tip: NAME_TIP };
 }
 
-// ---------- your existing features ----------
+// ---------- your existing automations ----------
 async function pickMyNameIfEnabled() {
   try {
     const { myName = "Caporuscio, James", autoMyName = true } =
@@ -201,14 +211,9 @@ async function pickMyNameIfEnabled() {
     const sels = getParaProSelects();
     for (const sel of sels) {
       if (sel.value) continue;
-      if (selectOptionByText(sel, myName)) {
-        console.log("[CTH/content] selected myName on", sel);
-        break;
-      }
+      if (selectOptionByText(sel, myName)) { break; }
     }
-  } catch (e) {
-    console.error("[CTH/content] pickMyNameIfEnabled error:", e);
-  }
+  } catch (e) { console.error("[CTH/content] pickMyNameIfEnabled error:", e); }
 }
 
 function parseSequence(seqStr) {
@@ -217,44 +222,25 @@ function parseSequence(seqStr) {
 function fillSequence(seqStr) {
   const nums = parseSequence(seqStr);
   if (!nums.length) return { filled: 0, total: 0 };
-
   const selects = getOneToFourSelects();
   let filled = 0;
-
   for (let i = 0; i < selects.length && i < nums.length; i++) {
     const sel = selects[i];
-    const want = String(nums[i]); // "1".."4"
+    const want = String(nums[i]);
     const opt = Array.from(sel.options).find(o => (o.textContent || "").trim() === want);
-    if (opt) {
-      sel.value = opt.value;
-      dispatchSelectEvents(sel);
-      filled++;
-    }
+    if (opt) { sel.value = opt.value; dispatchSelectEvents(sel); filled++; }
   }
   return { filled, total: Math.min(selects.length, nums.length) };
 }
 
-// ---------- save button (with fallbacks) ----------
+// ---------- Save button with fallbacks ----------
 function clickSaveButton() {
   const btn = document.querySelector(
-    '#submit_form,' +
-    'button#submit_form,' +
-    'button[name="save"],' +
-    'button[type="submit"],' +
-    'input[type="submit"]'
+    '#submit_form, button#submit_form, button[name="save"], button[type="submit"], input[type="submit"]'
   );
-
-  if (btn) {
-    btn.click(); // preserves handlers
-    return { ok: true, method: "button" };
-  }
-
+  if (btn) { clickLikeHuman(btn); return { ok: true, method: "button" }; }
   const form = document.querySelector('form#incident_form, form[action*="FormView"], form');
-  if (form) {
-    form.submit(); // fallback
-    return { ok: true, method: "form.submit" };
-  }
-
+  if (form) { form.submit(); return { ok: true, method: "form.submit" }; }
   return { ok: false, reason: "not_found" };
 }
 
@@ -263,10 +249,11 @@ let booted = false;
 function bootOnce() {
   if (booted) return;
   booted = true;
+  // Give their JS a moment to render, then keep Hadley sticky for a bit
   setTimeout(() => {
-    setResidenceHadley();     // default residence
-    pickMyNameIfEnabled();    // ParaPro auto-pick (if enabled)
-  }, 250);
+    stickyHadley(8);
+    pickMyNameIfEnabled();
+  }, 300);
 }
 bootOnce();
 
@@ -274,47 +261,32 @@ bootOnce();
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
-      // 1) Try ParaPro <select> pick first
+      // Try ParaPro selects first; if not, use Resident autocomplete
       const sels = getParaProSelects();
       let ok = false;
-      for (const sel of sels) {
-        if (selectOptionByText(sel, msg.name)) { ok = true; break; }
-      }
-      if (!ok) {
-        // 2) If that failed, try Resident autocomplete
-        //    (works for the screenshoted search box)
-        // Note: returns a Promise → we must reply async
-        setResidentName(msg.name).then(done => sendResponse?.({ ok: !!done }));
-        return true; // async response
-      }
-      sendResponse?.({ ok: true, via: "select" });
-      return false;
+      for (const sel of sels) { if (selectOptionByText(sel, msg.name)) { ok = true; break; } }
+      if (ok) { sendResponse?.({ ok: true, via: "select" }); return false; }
+
+      // Autocomplete is async
+      setResidentName(msg.name).then(res => sendResponse?.(res));
+      return true; // async
 
     } else if (msg?.type === "FILL_SEQUENCE") {
-      const res = fillSequence(msg.seq);
-      sendResponse?.(res);
-      return false;
+      sendResponse?.(fillSequence(msg.seq)); return false;
 
     } else if (msg?.type === "SAVE_FORM") {
-      const res = clickSaveButton();
-      sendResponse?.(res);
-      return false;
+      sendResponse?.(clickSaveButton()); return false;
 
     } else if (msg?.type === "SET_DATE") {
-      const ok = setDateRangeISO(msg.from, msg.to || msg.from);
-      sendResponse?.({ ok });
-      return false;
+      sendResponse?.({ ok: setDateRangeISO(msg.from, msg.to || msg.from) }); return false;
 
     } else if (msg?.type === "RUN_FILL") {
-      pickMyNameIfEnabled();
-      sendResponse?.({ ok: true });
-      return false;
+      pickMyNameIfEnabled(); sendResponse?.({ ok: true }); return false;
     }
   } catch (e) {
     console.error("[CTH/content] handler error:", e);
     sendResponse?.({ ok: false, error: String(e) });
     return false;
   }
-
   return false;
 });
