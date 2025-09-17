@@ -8,7 +8,7 @@
   "action": {
     "default_title": "Run Auto-Fill",
     "default_popup": "src/popup.html",
-    "default_icon": "src/kanyeicide.jpg"
+    "default_icon": "src/kanyeicide.png"
   },
   "commands": {
     "run-fill": {
