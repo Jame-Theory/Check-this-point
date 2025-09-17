@@ -1,5 +1,5 @@
-// ========== content.js (hardened) ==========
-console.log("[CTH/content] loaded");
+// ========== content.js (pagination-aware results + verbose logs) ==========
+console.log("[CTH] content.js loaded");
 
 // ---------- small utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -29,7 +29,7 @@ function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {})
   });
 }
 
-// ---------- your existing helpers ----------
+// ---------- helpers you already had ----------
 function dispatchSelectEvents(sel) { change(sel); }
 
 function selectOptionByText(selectEl, targetText) {
@@ -105,10 +105,11 @@ function setDateRangeISO(fromISO, toISO) {
   let ok = true;
   if (from) { from.value = fromISO; if ("valueAsDate" in from) from.valueAsDate = new Date(fromISO+"T00:00:00"); change(from); } else ok=false;
   if (to)   { to.value   = toISO;   if ("valueAsDate" in to)   to.valueAsDate   = new Date(toISO+"T00:00:00");   change(to);   } else ok=false;
+  console.log("[CTH/date] setDateRangeISO", { fromISO, toISO, ok });
   return ok;
 }
 
-// ---------- Resident (API + hidden inputs, with retries) ----------
+// ---------- Resident (API + hidden inputs, pagination-aware) ----------
 const STUDENT_QID = 1769;
 
 function residentRoot() {
@@ -135,7 +136,7 @@ function residentClearButton(root = residentRoot()) {
   return root.querySelector('.action-bar .clear-selected, button.clear-selected');
 }
 function clearResidentUI(root = residentRoot()) {
-  // click "Clear selected" if present
+  console.log("[CTH/resident] Clearing existing resident UI/hidden values");
   const btn = residentClearButton(root);
   if (btn) { btn.click(); }
   const hid = residentHiddenId(root); if (hid) { hid.value = ""; change(hid); }
@@ -155,7 +156,9 @@ function getStudentSearchUrlFromContext() {
       const cur = stack.pop();
       if (cur && typeof cur === "object") {
         if (cur.component === "StudentQuestion" && (cur.question_id === STUDENT_QID)) {
-          return cur.component_props?.search_url || null;
+          const u = cur.component_props?.search_url || null;
+          console.log("[CTH/resident] search_url from context:", u);
+          return u;
         }
         for (const k in cur) {
           const v = cur[k];
@@ -164,64 +167,195 @@ function getStudentSearchUrlFromContext() {
         }
       }
     }
-  } catch {}
+  } catch (e) {
+    console.warn("[CTH/resident] data-context parse failed", e);
+  }
   return null;
 }
+
+// Append a larger page size to reduce pagination churn
+function withPageSize(urlStr, n = 50) {
+  try {
+    const u = new URL(urlStr, location.origin);
+    if (!u.searchParams.has("page_size")) u.searchParams.set("page_size", String(n));
+    return u.pathname + u.search;
+  } catch {
+    return urlStr + (urlStr.includes("?") ? "&" : "?") + "page_size=" + n;
+  }
+}
+
 function buildStudentSearchUrls(query) {
   const base = getStudentSearchUrlFromContext() || "/reslife/student-select/?question_id=1769";
   const sep = base.includes("?") ? "&" : "?";
-  return [
-    `${base}${sep}term=${encodeURIComponent(query)}`,
-    `${base}${sep}q=${encodeURIComponent(query)}`
+  const urls = [
+    withPageSize(`${base}${sep}term=${encodeURIComponent(query)}`),
+    withPageSize(`${base}${sep}q=${encodeURIComponent(query)}`)
   ];
+  console.log("[CTH/resident] candidate URLs:", urls);
+  return urls;
 }
-function toIdTextList(arr) {
-  if (!Array.isArray(arr)) return [];
-  return arr.map(item => {
-    const id =
-      item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id ??
-      (typeof item.value === "object" ? item.value?.id : undefined);
-    const text =
-      item.text ?? item.label ?? item.name ?? item.display ?? item.full_name ??
-      (typeof item.value === "string" ? item.value : "");
-    return (id != null && text) ? { id: String(id), text: String(text) } : null;
-  }).filter(Boolean);
-}
-async function fetchStudentResults(query) {
-  const urls = buildStudentSearchUrls(query);
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { credentials: "include", headers: { "X-Requested-With": "XMLHttpRequest" } });
-      if (!res.ok) continue;
-      const ct = res.headers.get("content-type") || "";
-      if (!/json/i.test(ct)) continue;
-      const data = await res.json();
-      const list = toIdTextList(data);
-      if (list.length) return list;
-    } catch (e) { /* continue */ }
+
+// Normalize various JSON formats into [{id,text}]
+function toIdTextListFromJson(data) {
+  // If the API returns {count, next, results:[...]}
+  if (data && typeof data === "object" && Array.isArray(data.results)) {
+    const list = data.results.map(item => {
+      const id =
+        item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id;
+      const last = item.last_name || item.lastName || item.surname || "";
+      const first = item.first_name || item.firstName || item.given_name || item.preferred_name || "";
+      const display = item.display || item.text || item.label || item.name;
+      const text = display || [last, first].filter(Boolean).join(", ").trim();
+      return (id != null && text) ? { id: String(id), text: String(text) } : null;
+    }).filter(Boolean);
+    console.log("[CTH/resident] normalized list (paged JSON):", list);
+    return list;
   }
+  // If the API returns a plain list/array
+  if (Array.isArray(data)) {
+    const list = data.map(item => {
+      const id =
+        item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id ??
+        (typeof item.value === "object" ? item.value?.id : undefined);
+      const last = item.last_name || item.lastName || "";
+      const first = item.first_name || item.firstName || item.preferred_name || "";
+      const display = item.display || item.text || item.label || item.name;
+      const text = display || [last, first].filter(Boolean).join(", ").trim();
+      return (id != null && text) ? { id: String(id), text: String(text) } : null;
+    }).filter(Boolean);
+    console.log("[CTH/resident] normalized list (array JSON):", list);
+    return list;
+  }
+  console.log("[CTH/resident] JSON not recognized:", data);
   return [];
 }
+
+async function fetchStudentResults(query) {
+  const urls = buildStudentSearchUrls(query);
+  const tried = [];
+
+  function parseHtmlToList(html) {
+    try {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const items = Array.from(doc.querySelectorAll(
+        'ul[role="listbox"] li[role="option"], ul[role="listbox"] li, .ui-autocomplete li, .ui-menu-item, .select2-results__option, .dropdown-menu li, li'
+      ));
+      const list = items.map(li => {
+        const text = (li.textContent || "").trim();
+        const idAttr =
+          li.getAttribute("data-id") ||
+          li.getAttribute("data-value") ||
+          li.getAttribute("data-user-id") ||
+          li.getAttribute("data-person-id") ||
+          li.getAttribute("data-id-student") ||
+          null;
+        let id = idAttr;
+        if (!id) {
+          for (const a of li.attributes) {
+            if (a.name.startsWith("data-") && /\d{3,}/.test(a.value)) { id = a.value.match(/\d{3,}/)[0]; break; }
+          }
+        }
+        return (id && text) ? { id: String(id), text } : null;
+      }).filter(Boolean);
+      console.log("[CTH/resident] parsed HTML list:", list);
+      return list;
+    } catch (e) {
+      console.warn("[CTH/resident] HTML parse failed:", e);
+      return [];
+    }
+  }
+
+  // GET tries (use JSON, fallback to HTML)
+  for (const url of urls) {
+    try {
+      console.log("[CTH/resident] FETCH GET:", url);
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/html;q=0.9,*/*;q=0.8" },
+        method: "GET"
+      });
+      const ct = res.headers.get("content-type") || "";
+      const status = res.status;
+      console.log("[CTH/resident] GET status/content-type:", status, ct);
+      const txt = await res.text();
+      console.log("[CTH/resident] GET body preview:", txt.slice(0, 200).replace(/\n/g, "\\n"));
+      if (!res.ok) { tried.push({ url, method: "GET", status }); continue; }
+
+      if (/json/i.test(ct)) {
+        const data = JSON.parse(txt);
+        const list = toIdTextListFromJson(data);
+        if (list.length) return list;
+      } else {
+        const list = parseHtmlToList(txt);
+        if (list.length) return list;
+      }
+    } catch (e) {
+      console.warn("[CTH/resident] GET fetch failed for", url, e);
+    }
+  }
+
+  // POST tries (generally blocked by CSRF; logged for completeness)
+  for (const base of urls) {
+    try {
+      const u = new URL(base, location.origin);
+      const body = new URLSearchParams({ term: query, q: query });
+      console.log("[CTH/resident] FETCH POST:", u.pathname + u.search, "body:", body.toString());
+      const res = await fetch(u.pathname + u.search, {
+        credentials: "include",
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "Accept": "application/json, text/html;q=0.9,*/*;q=0.8",
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+        },
+        method: "POST",
+        body
+      });
+      const ct = res.headers.get("content-type") || "";
+      const status = res.status;
+      console.log("[CTH/resident] POST status/content-type:", status, ct);
+      const txt = await res.text();
+      console.log("[CTH/resident] POST body preview:", txt.slice(0, 200).replace(/\n/g, "\\n"));
+      if (!res.ok) { tried.push({ url: base, method: "POST", status }); continue; }
+
+      if (/json/i.test(ct)) {
+        const data = JSON.parse(txt);
+        const list = toIdTextListFromJson(data);
+        if (list.length) return list;
+      } else {
+        const list = parseHtmlToList(txt);
+        if (list.length) return list;
+      }
+    } catch (e) {
+      console.warn("[CTH/resident] POST fetch failed for", base, e);
+    }
+  }
+
+  console.warn("[CTH/resident] No results from any endpoint. Tried:", tried);
+  return [];
+}
+
 function pickBest(results, query) {
   const q = norm(query);
-  return (
-    results.find(r => norm(r.text) === q) ||
-    results.find(r => norm(r.text).startsWith(q)) ||
-    results.find(r => norm(r.text).includes(q)) ||
-    results[0]
-  );
+  // Prefer exact Last, First match if present
+  const exact = results.find(r => norm(r.text) === q);
+  const starts = results.find(r => norm(r.text).startsWith(q));
+  const contains = results.find(r => norm(r.text).includes(q));
+  const best = exact || starts || contains || results[0];
+  console.log("[CTH/resident] pickBest ->", best);
+  return best;
 }
+
 function populateResident({ id, text }) {
   const root = residentRoot();
   const hid = residentHiddenId(root);
-  if (!hid) return false;
-
   const flag = residentSelectedFlag(root);
-  // Set values
+  console.log("[CTH/resident] populateResident", { id, text, hasHidden: !!hid, hasFlag: !!flag });
+
+  if (!hid) { console.warn("[CTH/resident] hidden [1769][data] not found"); return false; }
+
   hid.value = String(id); change(hid);
   if (flag) { flag.value = "1"; change(flag); }
 
-  // Cosmetic
   const vis = residentSearchInput(root); if (vis) { vis.value = text; change(vis); }
   const disp = residentDisplayContainer(root);
   if (disp) {
@@ -230,16 +364,17 @@ function populateResident({ id, text }) {
     a.href = `/person/${id}/`; a.target = "_blank"; a.textContent = text;
     disp.appendChild(a);
   }
-  // Guard against re-renders for a short window
+
+  // Guard against DOM re-renders for 5s
   const end = Date.now() + 5000;
   const mo = new MutationObserver(() => {
     const h = residentHiddenId(root);
-    if (h && h.value !== String(id)) { h.value = String(id); change(h); }
+    if (h && h.value !== String(id)) { console.log("[CTH/resident] re-apply hidden id"); h.value = String(id); change(h); }
     const f = residentSelectedFlag(root);
-    if (f && f.value !== "1") { f.value = "1"; change(f); }
+    if (f && f.value !== "1") { console.log("[CTH/resident] re-apply selected flag"); f.value = "1"; change(f); }
   });
   mo.observe(root, { childList: true, subtree: true });
-  setTimeout(() => mo.disconnect(), end - Date.now());
+  setTimeout(() => mo.disconnect(), Math.max(0, end - Date.now()));
 
   return true;
 }
@@ -258,12 +393,15 @@ async function setResidentByName(query) {
   console.log("[CTH/resident] Raw query:", query);
 
   try {
-    // Ensure hidden inputs exist
+    // Wait for either the hidden id input OR the visible search box to exist
     try {
-      await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 });
-      console.log("[CTH/resident] Hidden resident input is present");
+      await Promise.race([
+        waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 12000 }),
+        waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 })
+      ]);
+      console.log("[CTH/resident] Resident controls are present");
     } catch {
-      console.warn("[CTH/resident] Hidden resident input not found after timeout");
+      console.warn("[CTH/resident] Resident controls not found after timeout");
     }
 
     // Clear stale selection
@@ -289,6 +427,7 @@ async function setResidentByName(query) {
     })();
     console.log("[CTH/resident] Query variants:", variants);
 
+    // Try each variant
     let best = null;
     for (const v of variants) {
       console.log("[CTH/resident] Trying variant:", v);
@@ -308,10 +447,9 @@ async function setResidentByName(query) {
 
     const ok = populateResident(best);
     console.log("[CTH/resident] Populated resident fields:", ok);
-
     if (!ok) return { ok: false, reason: "populate_failed" };
 
-    // Verify after short settle
+    // Verify after short settle (in case of DOM swaps)
     await sleep(150);
     const hid = residentHiddenId();
     const flag = residentSelectedFlag();
@@ -334,8 +472,7 @@ async function setResidentByName(query) {
   }
 }
 
-
-// ---------- your other features ----------
+// ---------- other features ----------
 async function pickMyNameIfEnabled() {
   try {
     const { myName = "Caporuscio, James", autoMyName = true } =
