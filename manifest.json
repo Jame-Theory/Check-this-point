@@ -24,8 +24,8 @@
     }
   ],
    "icons": {
-    "16": "kanyeicide.png",
-    "48": "kanyeicide.png",
-    "128": "kanyeicide.png"
+    "16": "src/kanyeicide.png",
+    "48": "src/kanyeicide.png",
+    "128": "src/kanyeicide.png"
   }
 }
