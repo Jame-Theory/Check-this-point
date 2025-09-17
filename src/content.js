@@ -134,17 +134,30 @@ function findResidentInput() {
   );
 }
 
+// --- DROP-IN REPLACEMENT ---
 const RES_OPT_QUERIES = [
   'ul[role="listbox"] li[role="option"]',
   'ul[role="listbox"] li',
   '.ui-autocomplete li',
   '.ui-menu-item',
+  '.select2-results__option',
   '.tt-menu .tt-suggestion',
   '.dropdown-menu li',
   '[role="option"]',
   '.autocomplete-suggestion'
 ];
 const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+function findResidentInput() {
+  return (
+    document.querySelector('input[name$="[1769][data]"]') ||
+    document.querySelector('#questions_new270026921_1769_data input[type="text"]') ||
+    document.querySelector('input[role="combobox"][aria-label*="Resident" i]') ||
+    document.querySelector('input[placeholder*="Resident" i]') ||
+    document.querySelector('input[aria-label*="Student" i]') ||
+    null
+  );
+}
 
 function visibleOptions() {
   for (const q of RES_OPT_QUERIES) {
@@ -154,30 +167,43 @@ function visibleOptions() {
   return [];
 }
 
-// Tip for the user in case it helps:
-const NAME_TIP = "Use 'Last, First' (e.g., 'Doe, Jane'). Partial last name works too.";
+function fire(el, type, init = {}) {
+  el.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
+}
+function key(el, type, k, code = k) {
+  el.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true }));
+}
+function clickLikeHuman(el) {
+  const r = el.getBoundingClientRect();
+  const x = r.left + Math.max(2, Math.min(8, r.width / 2));
+  const y = r.top + Math.max(2, Math.min(8, r.height / 2));
+  for (const t of ["pointerdown", "mousedown", "mouseup", "click"]) {
+    el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }
+}
 
-// Type query, wait for list, click best match
-async function setResidentName(query, timeoutMs = 4000) {
+// KEYBOARD-FIRST resident picker
+async function setResidentName(query, timeoutMs = 4500) {
   const input = findResidentInput();
   if (!input) {
     console.warn("[CTH/content] Resident input not found");
-    return { ok: false, reason: "input_not_found", tip: NAME_TIP };
+    return { ok: false, reason: "input_not_found" };
   }
 
-  // Focus and type the query
+  // 1) Focus + type (ensure their listeners run)
   input.focus();
   input.value = query;
-  dispatchChange(input);
-  key(input, "keydown", "a", "KeyA"); key(input, "keyup", "a", "KeyA"); // wake listeners
+  fire(input, "input");
+  fire(input, "change");
+  key(input, "keydown", "a", "KeyA"); key(input, "keyup", "a", "KeyA");
 
   const want = normalize(query);
   const start = performance.now();
 
   while (performance.now() - start < timeoutMs) {
+    // 2) If a menu is visible, try clicking an exact/startsWith/contains match
     const items = visibleOptions();
     if (items.length) {
-      // exact (case-insensitive) → startsWith → contains → first
       let choice =
         items.find(li => normalize(li.textContent) === want) ||
         items.find(li => normalize(li.textContent).startsWith(want)) ||
@@ -186,19 +212,35 @@ async function setResidentName(query, timeoutMs = 4000) {
 
       if (choice) {
         choice.scrollIntoView({ block: "center", inline: "nearest" });
+        // try click first
         clickLikeHuman(choice);
-        // confirm for combobox components that want Enter on input
+        // some widgets need Enter on the input to commit
         key(input, "keydown", "Enter", "Enter");
         key(input, "keyup", "Enter", "Enter");
-        dispatchChange(input);
-        return { ok: true, chosen: (choice.textContent || "").trim() };
+        fire(input, "input"); fire(input, "change");
+        return { ok: true, chosen: (choice.textContent || "").trim(), via: "list-click" };
       }
     }
+
+    // 3) Keyboard fallback: ArrowDown (highlight first), then Enter to commit
+    key(input, "keydown", "ArrowDown", "ArrowDown");
+    key(input, "keyup", "ArrowDown", "ArrowDown");
+    key(input, "keydown", "Enter", "Enter");
+    key(input, "keyup", "Enter", "Enter");
+    fire(input, "input"); fire(input, "change");
+
+    // Heuristic: if input lost focus or its value changed from our query, assume it committed.
+    if (document.activeElement !== input || normalize(input.value) !== normalize(query)) {
+      return { ok: true, chosen: input.value, via: "kbd" };
+    }
+
     await new Promise(r => setTimeout(r, 120));
   }
 
-  return { ok: false, reason: "no_suggestions", tip: NAME_TIP };
+  console.warn("[CTH/content] No resident suggestion committed for:", query);
+  return { ok: false, reason: "no_commit" };
 }
+
 
 // ---------- your existing automations ----------
 async function pickMyNameIfEnabled() {
