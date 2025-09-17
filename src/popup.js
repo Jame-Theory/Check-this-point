@@ -76,3 +76,9 @@ $("clearSeq")?.addEventListener("click", () => {
   console.log("[CTH] clearSeq clicked");
   if ($("sequence")) $("sequence").value = "";
 });
+
+// Save on-page form
+$("saveForm")?.addEventListener("click", async () => {
+  console.log("[CTH] saveForm clicked");
+  await sendToTab({ type: "SAVE_FORM" });
+});

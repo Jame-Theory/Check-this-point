@@ -124,6 +124,34 @@ function fillSequence(seqStr) {
   return res;
 }
 
+function clickSaveButton() {
+  // Try common save/submit buttons first (explicit "Save progress" id, then likely fallbacks)
+  const btn = document.querySelector(
+    '#submit_form, ' +                 // your page's Save progress button
+    'button#submit_form, ' +           // in case it's a <button id="submit_form">
+    'button[name="save"], ' +          // generic "save" button
+    'button[type="submit"], ' +        // any submit-type button
+    'input[type="submit"]'             // input submit
+  );
+
+  if (btn) {
+    console.log("[CTH/content] clicking save/submit button:", btn);
+    btn.click(); // preserves site submit handlers
+    return { ok: true, method: "button" };
+  }
+
+  // Fallback: submit the form directly if found
+  const form = document.querySelector('form#incident_form, form[action*="FormView"], form');
+  if (form) {
+    console.log("[CTH/content] submitting form via form.submit()");
+    form.submit(); // note: bypasses onsubmit handlers; prefer button click when possible
+    return { ok: true, method: "form.submit" };
+  }
+
+  console.warn("[CTH/content] save button/form not found");
+  return { ok: false, reason: "not_found" };
+}
+
 // ---------- boot + listeners ----------
 let booted = false;
 async function bootOnce() {
@@ -153,6 +181,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     pickMyNameIfEnabled();
     sendResponse?.({ ok: true });
     return false; // responded now
+
+  } else if (msg?.type === "SAVE_FORM") {
+  const res = clickSaveButton();
+  sendResponse?.(res);
+  return false; // responded now
   }
 
   // No matching handler: don't claim async
