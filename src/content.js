@@ -1,14 +1,14 @@
-// ========== content.js (works with hidden inputs) ==========
+// ========== content.js (hardened) ==========
 console.log("[CTH/content] loaded");
 
-// ---------------- small utils ----------------
+// ---------- small utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
 const fire = (el, type, init = {}) =>
   el?.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
-const dispatchChange = (el) => { fire(el, "input"); fire(el, "change"); };
-const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+const change = (el) => { fire(el, "input"); fire(el, "change"); };
 
-// Wait for element utility
+// Wait for element under root
 function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {}) {
   const found = root.querySelector(selector);
   if (found) return Promise.resolve(found);
@@ -19,7 +19,7 @@ function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {})
     });
     mo.observe(root, { childList: true, subtree: true });
     const t = setTimeout(() => { mo.disconnect(); reject(new Error("timeout")); }, timeout);
-    (async function p() {
+    (async function loop() {
       for (let i = 0; i < timeout / poll; i++) {
         const el = root.querySelector(selector);
         if (el) { clearTimeout(t); mo.disconnect(); return resolve(el); }
@@ -29,8 +29,8 @@ function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {})
   });
 }
 
-// ---------------- select helpers (yours) ----------------
-function dispatchSelectEvents(sel) { dispatchChange(sel); }
+// ---------- your existing helpers ----------
+function dispatchSelectEvents(sel) { change(sel); }
 
 function selectOptionByText(selectEl, targetText) {
   const t = norm(targetText);
@@ -41,22 +41,19 @@ function selectOptionByText(selectEl, targetText) {
   dispatchSelectEvents(selectEl);
   return true;
 }
-
 function looksLikePeopleSelect(sel) {
   const opts = Array.from(sel.options);
   if (opts.length < 5) return false;
-  const hasCommaNames = opts.filter(o => (o.textContent || "").includes(",")).length >= 3;
-  const hasDashSelect = opts.some(o => (o.textContent || "").toLowerCase().includes("- select"));
-  return hasCommaNames || hasDashSelect;
+  const hasComma = opts.filter(o => (o.textContent || "").includes(",")).length >= 3;
+  const hasDash = opts.some(o => (o.textContent || "").toLowerCase().includes("- select"));
+  return hasComma || hasDash;
 }
-
 function getParaProSelects() {
-  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro field
+  const byName = document.querySelectorAll('select[name$="[1820][data]"]');
   const all = Array.from(document.querySelectorAll("select"));
   const peopleish = all.filter(looksLikePeopleSelect);
   return Array.from(new Set([...byName, ...peopleish]));
 }
-
 function getOneToFourSelects() {
   const ok = [];
   document.querySelectorAll("select").forEach(sel => {
@@ -68,9 +65,8 @@ function getOneToFourSelects() {
   return ok;
 }
 
-// ---------------- Hadley: keep it selected ----------------
+// ---------- Hadley sticky ----------
 const HADLEY_ENTITY_ID = "1748";
-
 function hadleyRadio() {
   return (
     document.querySelector(`input[type="radio"][name="answers[gensec][location]"][value="${HADLEY_ENTITY_ID}"]`) ||
@@ -78,7 +74,6 @@ function hadleyRadio() {
       .find(r => r.value === HADLEY_ENTITY_ID || /hadley\s+village/i.test(r.closest("label")?.textContent || ""))
   );
 }
-
 function selectHadleyOnce() {
   const r = hadleyRadio();
   if (!r) return false;
@@ -87,11 +82,10 @@ function selectHadleyOnce() {
   if (!r.checked) { r.checked = true; dispatchSelectEvents(r); }
   return r.checked;
 }
-
-function keepHadleySelected(ms = 12000) {
+function keepHadleySelected(ms = 15000) {
   const end = Date.now() + ms;
   (async () => {
-    for (let i = 0; i < 30 && Date.now() < end; i++) {
+    for (let i = 0; i < 40 && Date.now() < end; i++) {
       if (selectHadleyOnce()) break;
       await sleep(150);
     }
@@ -104,63 +98,52 @@ function keepHadleySelected(ms = 12000) {
   setTimeout(() => mo.disconnect(), ms);
 }
 
-// ---------------- Dates ----------------
+// ---------- Dates ----------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
   let ok = true;
-
-  if (from) {
-    from.value = fromISO;
-    if ("valueAsDate" in from) { const d = new Date(fromISO + "T00:00:00"); if (!isNaN(d)) from.valueAsDate = d; }
-    dispatchSelectEvents(from);
-  } else ok = false;
-
-  if (to) {
-    to.value = toISO;
-    if ("valueAsDate" in to) { const d2 = new Date(toISO + "T00:00:00"); if (!isNaN(d2)) to.valueAsDate = d2; }
-    dispatchSelectEvents(to);
-  } else ok = false;
-
-  console.log("[CTH/content] setDateRangeISO:", { fromISO, toISO, ok });
+  if (from) { from.value = fromISO; if ("valueAsDate" in from) from.valueAsDate = new Date(fromISO+"T00:00:00"); change(from); } else ok=false;
+  if (to)   { to.value   = toISO;   if ("valueAsDate" in to)   to.valueAsDate   = new Date(toISO+"T00:00:00");   change(to);   } else ok=false;
   return ok;
 }
 
-// ---------------- Resident Name (deterministic via hidden inputs) ----------------
+// ---------- Resident (API + hidden inputs, with retries) ----------
 const STUDENT_QID = 1769;
 
-// Find the resident question subtree (beneath ParaPro)
 function residentRoot() {
   return (
     document.getElementById("questions_new270026921_1769_data") ||
-    document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') || // flexible
-    document.querySelector('.question-type--student') || // generic fallback
+    document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') ||
+    document.querySelector('.question-type--student') ||
     document
   );
 }
-
-// Find the two critical hidden inputs in that row
 function residentHiddenId(root = residentRoot()) {
   return root.querySelector('input[type="hidden"].student-field-value-hidden[name$="[1769][data]"], input[type="hidden"][name$="[1769][data]"]');
 }
 function residentSelectedFlag(root = residentRoot()) {
   return root.querySelector('input[type="hidden"].student_selected') || root.querySelector('input[type="hidden"][name$="[selected]"]');
 }
-
-// Visible bits (best-effort cosmetic update)
-function residentSearchInput(root = residentRoot()) {
-  return root.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]')
-      || root.querySelector('.student-select-search-bar input[type="text"]');
-}
 function residentDisplayContainer(root = residentRoot()) {
-  return root.querySelector('.student-selected-container') || root.querySelector('#questions_new270026921_1769_data');
+  return root.querySelector('.student-selected-container') || root.querySelector(`#questions_new270026921_${STUDENT_QID}_data`);
 }
-function clearWarning(root = residentRoot()) {
-  const warn = root.querySelector('.alert.alert-warning');
-  if (warn) warn.style.display = 'none';
+function residentSearchInput(root = residentRoot()) {
+  return root.querySelector('.student-select-search-bar input[type="text"]');
+}
+function residentClearButton(root = residentRoot()) {
+  return root.querySelector('.action-bar .clear-selected, button.clear-selected');
+}
+function clearResidentUI(root = residentRoot()) {
+  // click "Clear selected" if present
+  const btn = residentClearButton(root);
+  if (btn) { btn.click(); }
+  const hid = residentHiddenId(root); if (hid) { hid.value = ""; change(hid); }
+  const flag = residentSelectedFlag(root); if (flag) { flag.value = "0"; change(flag); }
+  const vis = residentSearchInput(root); if (vis) { vis.value = ""; change(vis); }
+  const disp = residentDisplayContainer(root); if (disp) disp.innerHTML = "";
 }
 
-// Pull search URL from data-context (authoritative)
 function getStudentSearchUrlFromContext() {
   try {
     const table = document.querySelector('table.form_table.ereztable.form-display');
@@ -181,12 +164,9 @@ function getStudentSearchUrlFromContext() {
         }
       }
     }
-  } catch (e) {
-    console.warn("[CTH/content] data-context parse failed", e);
-  }
+  } catch {}
   return null;
 }
-
 function buildStudentSearchUrls(query) {
   const base = getStudentSearchUrlFromContext() || "/reslife/student-select/?question_id=1769";
   const sep = base.includes("?") ? "&" : "?";
@@ -195,8 +175,6 @@ function buildStudentSearchUrls(query) {
     `${base}${sep}q=${encodeURIComponent(query)}`
   ];
 }
-
-// Normalize API results to {id, text}
 function toIdTextList(arr) {
   if (!Array.isArray(arr)) return [];
   return arr.map(item => {
@@ -209,7 +187,6 @@ function toIdTextList(arr) {
     return (id != null && text) ? { id: String(id), text: String(text) } : null;
   }).filter(Boolean);
 }
-
 async function fetchStudentResults(query) {
   const urls = buildStudentSearchUrls(query);
   for (const url of urls) {
@@ -221,13 +198,10 @@ async function fetchStudentResults(query) {
       const data = await res.json();
       const list = toIdTextList(data);
       if (list.length) return list;
-    } catch (e) {
-      console.warn("[CTH/content] fetch student failed", url, e);
-    }
+    } catch (e) { /* continue */ }
   }
   return [];
 }
-
 function pickBest(results, query) {
   const q = norm(query);
   return (
@@ -237,55 +211,90 @@ function pickBest(results, query) {
     results[0]
   );
 }
-
-function populateResidentFields({ id, text }) {
+function populateResident({ id, text }) {
   const root = residentRoot();
   const hid = residentHiddenId(root);
+  if (!hid) return false;
+
   const flag = residentSelectedFlag(root);
+  // Set values
+  hid.value = String(id); change(hid);
+  if (flag) { flag.value = "1"; change(flag); }
 
-  if (!hid) {
-    console.warn("[CTH/content] resident hidden [1769][data] not found");
-    return false;
-  }
-
-  hid.value = String(id);
-  dispatchChange(hid);
-
-  if (flag) {
-    flag.value = "1";
-    dispatchChange(flag);
-  }
-
-  // Cosmetic: update visible display & input
+  // Cosmetic
+  const vis = residentSearchInput(root); if (vis) { vis.value = text; change(vis); }
   const disp = residentDisplayContainer(root);
-  if (disp && !disp.querySelector("a")) {
-    const a = document.createElement("a");
-    // Their links look like /person/lastname-<id>/. We don't know slug, so link to /person/<id>/ fallback:
-    a.href = `/person/${id}/`;
-    a.target = "_blank";
-    a.textContent = text;
+  if (disp) {
     disp.innerHTML = "";
+    const a = document.createElement("a");
+    a.href = `/person/${id}/`; a.target = "_blank"; a.textContent = text;
     disp.appendChild(a);
   }
-  const vis = residentSearchInput(root);
-  if (vis) { vis.value = text; dispatchChange(vis); }
+  // Guard against re-renders for a short window
+  const end = Date.now() + 5000;
+  const mo = new MutationObserver(() => {
+    const h = residentHiddenId(root);
+    if (h && h.value !== String(id)) { h.value = String(id); change(h); }
+    const f = residentSelectedFlag(root);
+    if (f && f.value !== "1") { f.value = "1"; change(f); }
+  });
+  mo.observe(root, { childList: true, subtree: true });
+  setTimeout(() => mo.disconnect(), end - Date.now());
 
-  clearWarning(root);
-  console.log("[CTH/content] Resident set:", { id, text });
   return true;
 }
 
+// Prevent overlapping resident lookups
+let residentBusy = false;
 async function setResidentByName(query) {
-  // ensure the question exists so hidden inputs are in DOM
-  try { await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 }); } catch {}
-  const results = await fetchStudentResults(query);
-  if (!results.length) return { ok: false, reason: "no_results" };
-  const best = pickBest(results, query);
-  const ok = populateResidentFields(best);
-  return ok ? { ok: true, id: best.id, label: best.text } : { ok: false, reason: "populate_failed" };
+  if (!query || !query.trim()) return { ok: false, reason: "empty_query" };
+  while (residentBusy) await sleep(50);
+  residentBusy = true;
+  try {
+    // Ensure the question exists so hidden inputs are present
+    try { await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 }); } catch {}
+    clearResidentUI();
+
+    // Try a few variants to maximize matches
+    const variants = (() => {
+      const q = query.trim();
+      if (q.includes(",")) {
+        const [last, firstRaw] = q.split(",").map(s => s.trim());
+        const first = firstRaw?.split(/\s+/)[0] || "";
+        return [q, `${first} ${last}`, last];
+      } else {
+        const parts = q.split(/\s+/);
+        if (parts.length >= 2) {
+          const [first, ...rest] = parts;
+          const last = rest.join(" ");
+          return [`${last}, ${first}`, `${first} ${last}`, last];
+        }
+        return [q];
+      }
+    })();
+
+    let best = null;
+    for (const v of variants) {
+      const results = await fetchStudentResults(v);
+      if (results.length) { best = pickBest(results, v); break; }
+    }
+    if (!best) return { ok: false, reason: "no_results" };
+
+    const ok = populateResident(best);
+    if (!ok) return { ok: false, reason: "populate_failed" };
+
+    // Verify after a short settle (DOM replacements)
+    await sleep(150);
+    const hid = residentHiddenId();
+    const flag = residentSelectedFlag();
+    const verified = !!(hid && hid.value === String(best.id) && (!flag || flag.value === "1"));
+    return verified ? { ok: true, id: best.id, label: best.text } : { ok: false, reason: "verify_failed" };
+  } finally {
+    residentBusy = false;
+  }
 }
 
-// ---------------- existing features ----------------
+// ---------- your other features ----------
 async function pickMyNameIfEnabled() {
   try {
     const { myName = "Caporuscio, James", autoMyName = true } =
@@ -296,15 +305,11 @@ async function pickMyNameIfEnabled() {
       if (sel.value) continue;
       if (selectOptionByText(sel, myName)) break;
     }
-  } catch (e) {
-    console.error("[CTH/content] pickMyNameIfEnabled error:", e);
-  }
+  } catch (e) { /* noop */ }
 }
-
 function parseSequence(seqStr) {
   return Array.from(seqStr || "").filter(ch => /[1-4]/.test(ch)).map(d => Number(d));
 }
-
 function fillSequence(seqStr) {
   const nums = parseSequence(seqStr);
   if (!nums.length) return { filled: 0, total: 0 };
@@ -318,8 +323,6 @@ function fillSequence(seqStr) {
   }
   return { filled, total: Math.min(selects.length, nums.length) };
 }
-
-// Save button with fallbacks
 function clickSaveButton() {
   const btn = document.querySelector(
     '#submit_form, button#submit_form, button[name="save"], button[type="submit"], input[type="submit"]'
@@ -330,40 +333,36 @@ function clickSaveButton() {
   return { ok: false, reason: "not_found" };
 }
 
-// ---------------- boot ----------------
+// ---------- boot ----------
 let booted = false;
 function bootOnce() {
   if (booted) return;
   booted = true;
   setTimeout(() => {
-    keepHadleySelected(12000);
+    keepHadleySelected(15000);
     pickMyNameIfEnabled();
   }, 350);
 }
 bootOnce();
 
-// ---------------- message bridge ----------------
+// ---------- bridge ----------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
       setResidentByName(msg.name).then(res => sendResponse?.(res));
       return true; // async
-
     } else if (msg?.type === "FILL_SEQUENCE") {
       sendResponse?.(fillSequence(msg.seq)); return false;
-
     } else if (msg?.type === "SAVE_FORM") {
       sendResponse?.(clickSaveButton()); return false;
-
     } else if (msg?.type === "SET_DATE") {
       const from = msg.from || msg.date;
       const to   = msg.to   || msg.date || msg.from;
       sendResponse?.({ ok: setDateRangeISO(from, to || from) });
       return false;
-
     } else if (msg?.type === "RUN_FILL") {
       pickMyNameIfEnabled();
-      keepHadleySelected(8000);
+      keepHadleySelected(12000);
       sendResponse?.({ ok: true });
       return false;
     }
