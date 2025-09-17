@@ -21,8 +21,7 @@ async function sendToTab(msg) {
     console.log("[CTH] Response:", response);
     return response;
   } catch (err) {
-    console.warn("[CTH] sendMessage error (content script not ready yet?):", err);
-    // Try to inject a no-op ping to wake perms (optional)
+    console.warn("[CTH] sendMessage error:", err);
     return null;
   }
 }
@@ -30,16 +29,19 @@ async function sendToTab(msg) {
 // Init: load saved preferences
 (async function init() {
   try {
-    const { myName = "Caporuscio, James", autoMyName = true, defaultDate = "" } =
+    const { myName = "Caporuscio, James", autoMyName = true, dateFrom = "", dateTo = "" } =
       await chrome.storage.sync.get({
         myName: "Caporuscio, James",
         autoMyName: true,
-        defaultDate: ""
+        dateFrom: "",
+        dateTo: ""
       });
 
+    $("myName")?.setAttribute("value", myName);
     if ($("myName")) $("myName").value = myName;
     if ($("autoMyName")) $("autoMyName").checked = autoMyName;
-    if ($("dateISO")) $("dateISO").value = defaultDate;
+    if ($("dateFrom")) $("dateFrom").value = dateFrom;
+    if ($("dateTo"))   $("dateTo").value = dateTo;
   } catch (err) {
     console.error("[CTH] Error loading prefs:", err);
   }
@@ -50,17 +52,25 @@ $("savePrefs")?.addEventListener("click", async () => {
   const newPrefs = {
     myName: $("myName")?.value.trim(),
     autoMyName: $("autoMyName")?.checked,
-    defaultDate: $("dateISO")?.value || ""
   };
   await chrome.storage.sync.set(newPrefs);
   console.log("[CTH] Saved prefs:", newPrefs);
 });
 
-// Run “pick name”
+// Run “pick resident”
 $("runPickName")?.addEventListener("click", async () => {
   const name = $("pickName")?.value.trim();
   if (!name) return;
   await sendToTab({ type: "PICK_NAME", name });
+});
+
+// Set date RANGE
+$("setDateRange")?.addEventListener("click", async () => {
+  const from = $("dateFrom")?.value;
+  const to   = $("dateTo")?.value;
+  if (!from) return;
+  await chrome.storage.sync.set({ dateFrom: from, dateTo: to });
+  await sendToTab({ type: "SET_DATE_RANGE", from, to });
 });
 
 // Run “sequence”
@@ -70,19 +80,12 @@ $("runSeq")?.addEventListener("click", async () => {
   await sendToTab({ type: "FILL_SEQUENCE", seq });
 });
 
-// Set date (single date to both from/to for convenience)
-$("setDate")?.addEventListener("click", async () => {
-  const d = $("dateISO")?.value;
-  if (!d) return;
-  await sendToTab({ type: "SET_DATE", date: d });
-});
-
 // Save form on page
 $("saveForm")?.addEventListener("click", async () => {
   await sendToTab({ type: "SAVE_FORM" });
 });
 
-// ---------- ENTER key handlers ----------
+// ---------- ENTER key helpers ----------
 function clickOnEnter(inputEl, buttonEl) {
   if (!inputEl || !buttonEl) return;
   inputEl.addEventListener("keydown", (e) => {
@@ -92,13 +95,12 @@ function clickOnEnter(inputEl, buttonEl) {
     }
   });
 }
-
 clickOnEnter($("pickName"), $("runPickName"));
-clickOnEnter($("sequence"), $("runSeq"));
-clickOnEnter($("dateISO"), $("setDate"));
+clickOnEnter($("dateFrom"), $("setDateRange"));
+clickOnEnter($("dateTo"), $("setDateRange"));
 clickOnEnter($("myName"), $("savePrefs"));
 
-// Optional: allow Ctrl/⌘+Enter on textarea for sequence
+// Allow Ctrl/⌘+Enter for textarea
 $("sequence")?.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
     e.preventDefault();

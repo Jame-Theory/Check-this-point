@@ -1,14 +1,13 @@
-// ========== content.js (UI-driven resident select + verbose logs) ==========
+// ========== content.js (UI-driven resident select + date RANGE + stronger select) ==========
 console.log("[CTH] content.js loaded");
 
 // ---------- small utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
-const fire = (el, type, init = {}) =>
+const norm  = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+const fire  = (el, type, init = {}) =>
   el?.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
 const change = (el) => { fire(el, "input"); fire(el, "change"); };
 
-// Wait for element under root
 function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {}) {
   const found = root.querySelector(selector);
   if (found) return Promise.resolve(found);
@@ -29,7 +28,7 @@ function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {})
   });
 }
 
-// ---------- helpers you already had ----------
+// ---------- selects + helpers ----------
 function dispatchSelectEvents(sel) { change(sel); }
 
 function selectOptionByText(selectEl, targetText) {
@@ -37,27 +36,25 @@ function selectOptionByText(selectEl, targetText) {
   const opts = Array.from(selectEl?.options || []);
   const found = opts.find(o => norm(o.textContent || o.label) === t);
   if (!found) return false;
-  selectEl.value = found.value;
-  dispatchSelectEvents(selectEl);
-  return true;
+  selectEl.value = found.value; dispatchSelectEvents(selectEl); return true;
 }
 function looksLikePeopleSelect(sel) {
   const opts = Array.from(sel.options);
   if (opts.length < 5) return false;
   const hasComma = opts.filter(o => (o.textContent || "").includes(",")).length >= 3;
-  const hasDash = opts.some(o => (o.textContent || "").toLowerCase().includes("- select"));
+  const hasDash  = opts.some(o => (o.textContent || "").toLowerCase().includes("- select"));
   return hasComma || hasDash;
 }
 function getParaProSelects() {
-  const byName = document.querySelectorAll('select[name$="[1820][data]"]');
-  const all = Array.from(document.querySelectorAll("select"));
-  const peopleish = all.filter(looksLikePeopleSelect);
+  const byName   = document.querySelectorAll('select[name$="[1820][data]"]');
+  const all      = Array.from(document.querySelectorAll("select"));
+  const peopleish= all.filter(looksLikePeopleSelect);
   return Array.from(new Set([...byName, ...peopleish]));
 }
 function getOneToFourSelects() {
   const ok = [];
   document.querySelectorAll("select").forEach(sel => {
-    const texts = new Set(Array.from(sel.options).map(o => (o.textContent || "").trim()));
+    const texts   = new Set(Array.from(sel.options).map(o => (o.textContent || "").trim()));
     const cleaned = new Set([...texts].filter(t => t && !t.toLowerCase().startsWith("- select")));
     const allowed = new Set(["1","2","3","4"]);
     if (cleaned.size > 0 && [...cleaned].every(t => allowed.has(t))) ok.push(sel);
@@ -75,8 +72,7 @@ function hadleyRadio() {
   );
 }
 function selectHadleyOnce() {
-  const r = hadleyRadio();
-  if (!r) return false;
+  const r = hadleyRadio(); if (!r) return false;
   const lbl = document.querySelector(`label[for="${r.id}"]`) || r.closest("label");
   if (lbl) lbl.click();
   if (!r.checked) { r.checked = true; dispatchSelectEvents(r); }
@@ -98,20 +94,19 @@ function keepHadleySelected(ms = 15000) {
   setTimeout(() => mo.disconnect(), ms);
 }
 
-// ---------- Dates ----------
+// ---------- Date RANGE ----------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
   let ok = true;
-  if (from) { from.value = fromISO; if ("valueAsDate" in from) from.valueAsDate = new Date(fromISO+"T00:00:00"); change(from); } else ok=false;
-  if (to)   { to.value   = toISO;   if ("valueAsDate" in to)   to.valueAsDate   = new Date(toISO+"T00:00:00");   change(to);   } else ok=false;
+  if (from) { from.value = fromISO; if ("valueAsDate" in from) from.valueAsDate = new Date(fromISO + "T00:00:00"); change(from); } else ok=false;
+  if (to)   { to.value   = toISO;   if ("valueAsDate" in to)   to.valueAsDate   = new Date(toISO   + "T00:00:00"); change(to);   } else ok=false;
   console.log("[CTH/date] setDateRangeISO", { fromISO, toISO, ok });
   return ok;
 }
 
 // ---------- Resident selection (UI-driven) ----------
 const STUDENT_QID = 1769;
-
 function residentRoot() {
   return (
     document.getElementById("questions_new270026921_1769_data") ||
@@ -121,8 +116,8 @@ function residentRoot() {
   );
 }
 function residentHiddenId(root = residentRoot()) {
-  // broadened: any hidden input whose name contains [1769]
-  return root.querySelector('input[type="hidden"][name*="[1769]"]');
+  // be generous: any hidden whose name ends with [1769][data]
+  return root.querySelector('input[type="hidden"][name$="[1769][data]"], input[type="hidden"][name*="[1769]"][name$="[data]"]');
 }
 function residentSelectedFlag(root = residentRoot()) {
   return root.querySelector('input[type="hidden"].student_selected') || root.querySelector('input[type="hidden"][name$="[selected]"]');
@@ -134,7 +129,6 @@ function residentSearchInput(root = residentRoot()) {
   return root.querySelector('.student-select-search-bar input[type="text"]');
 }
 function residentDropdownItems(doc = document) {
-  // cover common autocomplete menus
   return Array.from(doc.querySelectorAll(
     'ul[role="listbox"] li[role="option"], ul[role="listbox"] li, .ui-autocomplete li, .ui-menu-item, .select2-results__option, .dropdown-menu li'
   ));
@@ -145,20 +139,29 @@ function residentClearButton(root = residentRoot()) {
 function clearResidentUI(root = residentRoot()) {
   console.log("[CTH/resident] Clearing existing resident UI/hidden values");
   try { residentClearButton(root)?.click(); } catch {}
-  const hid = residentHiddenId(root); if (hid) { hid.value = ""; change(hid); }
-  const flag = residentSelectedFlag(root); if (flag) { flag.value = "0"; change(flag); }
-  const vis = residentSearchInput(root); if (vis) { vis.value = ""; change(vis); }
+  const hid  = residentHiddenId(root);       if (hid)  { hid.value = ""; change(hid); }
+  const flag = residentSelectedFlag(root);   if (flag) { flag.value = "0"; change(flag); }
+  const vis  = residentSearchInput(root);    if (vis)  { vis.value  = ""; change(vis); }
   const disp = residentDisplayContainer(root); if (disp) disp.innerHTML = "";
 }
 
-// Type in the visible search box, wait for dropdown, click the best match
-async function uiPickResident(query) {
+function verifyResidentPicked(query) {
   const root = residentRoot();
+  const hid  = residentHiddenId(root);
+  const disp = residentDisplayContainer(root);
+  const selectedId   = hid?.value || "";
+  const selectedText = (disp?.textContent || "").trim();
+  const ok = !!selectedId || norm(selectedText).includes(norm(query));
+  return { ok, selectedId, selectedText };
+}
 
-  const box = await waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 });
-  console.log("[CTH/resident] uiPickResident: got search box", box);
+// Type into the search field, then select the FIRST item (with keyboard, then mouse as fallback)
+async function uiPickResidentFirst(query) {
+  const root = residentRoot();
+  const box  = await waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 });
+  console.log("[CTH/resident] uiPickResidentFirst: got search box", box);
 
-  // focus + type
+  // focus & type
   box.focus();
   box.value = "";
   change(box);
@@ -166,68 +169,59 @@ async function uiPickResident(query) {
 
   box.value = query;
   change(box);
-  // Some widgets react only to keyboard events:
+
+  // Nudge key listeners
   box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
   box.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, key: "a" }));
-  await sleep(120); // let network fire
 
-  // wait for dropdown to appear and settle
+  // Wait for items
   let items = [];
-  for (let tries = 0; tries < 25; tries++) {
+  for (let tries = 0; tries < 30; tries++) {
     items = residentDropdownItems(document).filter(li => (li.textContent || "").trim());
     if (items.length) break;
     await sleep(100);
   }
-  console.log("[CTH/resident] uiPickResident: dropdown items:", items.length);
+  console.log("[CTH/resident] dropdown items:", items.length);
 
   if (!items.length) return { ok: false, reason: "no_dropdown_results" };
 
-  // pick best match by substring / startsWith / exact (case-insensitive)
-  const q = norm(query);
-  const scored = items.map(li => {
-    const text = (li.textContent || "").trim();
-    const n = norm(text);
-    let score = 0;
-    if (n === q) score = 100;
-    else if (n.startsWith(q)) score = 80;
-    else if (n.includes(q)) score = 60;
-    // prefer comma-format names
-    if (/,/.test(text)) score += 5;
-    return { li, text, score };
-  }).sort((a, b) => b.score - a.score);
+  // 1) Keyboard select: ArrowDown + Enter (some widgets only respect keyboard)
+  box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+  box.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, key: "ArrowDown" }));
+  await sleep(40);
+  box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+  box.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, key: "Enter" }));
+  await sleep(160);
 
-  const pick = scored[0];
-  console.log("[CTH/resident] uiPickResident: best item:", pick?.text, "score:", pick?.score);
+  let verify = verifyResidentPicked(query);
+  console.log("[CTH/resident] verify after keyboard:", verify);
+  if (verify.ok) return { ok: true, ...verify };
 
-  if (!pick || pick.score === 0) return { ok: false, reason: "no_viable_match" };
+  // 2) Mouse fallback: click the FIRST item hard (pointerdown/mousedown/click/pointerup/mouseup)
+  const first = items[0];
+  first.scrollIntoView({ block: "center" });
+  const evts = ["pointerdown","mousedown","click","pointerup","mouseup"];
+  for (const type of evts) {
+    first.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, buttons: 1 }));
+  }
+  await sleep(160);
 
-  // click the item
-  pick.li.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  pick.li.click();
-  pick.li.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-  await sleep(120);
+  verify = verifyResidentPicked(query);
+  console.log("[CTH/resident] verify after mouse:", verify);
+  if (verify.ok) return { ok: true, ...verify };
 
-  // verify hidden input got set (or the display container updated)
-  const hid = residentHiddenId(root);
-  const disp = residentDisplayContainer(root);
-  const selectedId = hid?.value || "";
-  const selectedText = (disp?.textContent || "").trim();
+  // 3) As a last resort, double-click
+  first.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window, buttons: 1 }));
+  await sleep(160);
 
-  console.log("[CTH/resident] uiPickResident verify:", { selectedId, selectedText });
-
-  // minimum verification: either we have an ID or the display text contains our query
-  const ok = !!selectedId || norm(selectedText).includes(q);
-  return ok ? { ok: true, id: selectedId, label: selectedText || pick.text }
-            : { ok: false, reason: "verify_failed", id: selectedId, label: selectedText };
+  verify = verifyResidentPicked(query);
+  console.log("[CTH/resident] verify after dblclick:", verify);
+  return verify.ok ? { ok: true, ...verify } : { ok: false, reason: "verify_failed", ...verify };
 }
 
-// Prevent overlapping resident lookups
 let residentBusy = false;
 async function setResidentByName(query) {
-  if (!query || !query.trim()) {
-    console.warn("[CTH/resident] Empty query");
-    return { ok: false, reason: "empty_query" };
-  }
+  if (!query || !query.trim()) return { ok: false, reason: "empty_query" };
   while (residentBusy) await sleep(50);
   residentBusy = true;
 
@@ -235,25 +229,18 @@ async function setResidentByName(query) {
   console.log("[CTH/resident] Raw query:", query);
 
   try {
-    // Wait until either hidden input or the visible search exists
-    try {
-      await Promise.race([
-        waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 }),
-        waitFor('input[type="hidden"][name*="[1769]"]', { timeout: 12000 }),
-      ]);
-      console.log("[CTH/resident] Resident controls are present");
-    } catch {
-      console.warn("[CTH/resident] Resident controls not found after timeout");
-    }
+    // ensure UI exists
+    await Promise.race([
+      waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 }),
+      waitFor('input[type="hidden"][name$="[1769][data]"]',     { timeout: 12000 }),
+    ]).catch(() => { /* continue anyway */ });
+    console.log("[CTH/resident] Resident controls are present");
 
-    // Clear any old selection
     clearResidentUI();
     console.log("[CTH/resident] Cleared old resident selection");
 
-    // Drive the UI
-    const res = await uiPickResident(query);
-    console.log("[CTH/resident] uiPickResident result:", res);
-
+    const res = await uiPickResidentFirst(query);
+    console.log("[CTH/resident] uiPickResidentFirst result:", res);
     return res;
 
   } finally {
@@ -273,7 +260,7 @@ async function pickMyNameIfEnabled() {
       if (sel.value) continue;
       if (selectOptionByText(sel, myName)) break;
     }
-  } catch (e) { /* noop */ }
+  } catch { /* noop */ }
 }
 function parseSequence(seqStr) {
   return Array.from(seqStr || "").filter(ch => /[1-4]/.test(ch)).map(d => Number(d));
@@ -292,9 +279,7 @@ function fillSequence(seqStr) {
   return { filled, total: Math.min(selects.length, nums.length) };
 }
 function clickSaveButton() {
-  const btn = document.querySelector(
-    '#submit_form, button#submit_form, button[name="save"], button[type="submit"], input[type="submit"]'
-  );
+  const btn = document.querySelector('#submit_form, button#submit_form, button[name="save"], button[type="submit"], input[type="submit"]');
   if (btn) { btn.click(); return { ok: true, method: "button" }; }
   const form = document.querySelector('form#incident_form, form[action*="FormView"], form');
   if (form) { form.submit(); return { ok: true, method: "form.submit" }; }
@@ -304,8 +289,7 @@ function clickSaveButton() {
 // ---------- boot ----------
 let booted = false;
 function bootOnce() {
-  if (booted) return;
-  booted = true;
+  if (booted) return; booted = true;
   setTimeout(() => {
     keepHadleySelected(15000);
     pickMyNameIfEnabled();
@@ -313,7 +297,7 @@ function bootOnce() {
 }
 bootOnce();
 
-// ---------- bridge ----------
+// ---------- messaging bridge ----------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
@@ -323,9 +307,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse?.(fillSequence(msg.seq)); return false;
     } else if (msg?.type === "SAVE_FORM") {
       sendResponse?.(clickSaveButton()); return false;
-    } else if (msg?.type === "SET_DATE") {
-      const from = msg.from || msg.date;
-      const to   = msg.to   || msg.date || msg.from;
+    } else if (msg?.type === "SET_DATE_RANGE") {
+      const { from, to } = msg;
       sendResponse?.({ ok: setDateRangeISO(from, to || from) });
       return false;
     } else if (msg?.type === "RUN_FILL") {
