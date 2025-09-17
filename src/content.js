@@ -1,32 +1,36 @@
-// ========== content.js ==========
+// ========== content.js (deterministic resident select) ==========
 console.log("[CTH/content] loaded");
 
-// ---------- small utils ----------
+// ----------------- small utils -----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const fire = (el, type, init = {}) =>
   el?.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
-const key = (el, type, k, code = k) =>
-  el?.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true }));
+function dispatchChange(el) { fire(el, "input"); fire(el, "change"); }
 const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
 
-function isVisible(el) {
-  if (!el) return false;
-  const rect = el.getBoundingClientRect();
-  return !!(el.offsetParent || el.getClientRects().length) && rect.width >= 1 && rect.height >= 1;
+// Wait for an element (by selector) to appear under root (or document)
+function waitForElement(selector, { root = document, timeout = 8000, pollMs = 100 } = {}) {
+  const found = root.querySelector(selector);
+  if (found) return Promise.resolve(found);
+  return new Promise((resolve, reject) => {
+    const obs = new MutationObserver(() => {
+      const el = root.querySelector(selector);
+      if (el) { obs.disconnect(); resolve(el); }
+    });
+    obs.observe(root, { childList: true, subtree: true });
+    const t = setTimeout(() => { obs.disconnect(); reject(new Error("timeout")); }, timeout);
+    (async function poll() {
+      for (let i = 0; i < timeout / pollMs; i++) {
+        const el = root.querySelector(selector);
+        if (el) { clearTimeout(t); obs.disconnect(); return resolve(el); }
+        await sleep(pollMs);
+      }
+    })();
+  });
 }
 
-function clickLikeHuman(el) {
-  if (!el) return;
-  const r = el.getBoundingClientRect();
-  const x = r.left + Math.max(6, Math.min(r.width - 6, r.width / 2));
-  const y = r.top + Math.max(6, Math.min(r.height - 6, r.height / 2));
-  for (const t of ["pointerdown", "mousedown", "mouseup", "click"]) {
-    el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
-  }
-}
-
-// ---------- your existing select helpers ----------
-function dispatchSelectEvents(el) { fire(el, "input"); fire(el, "change"); }
+// ----------------- select helpers you had -----------------
+function dispatchSelectEvents(sel) { dispatchChange(sel); }
 
 function selectOptionByText(selectEl, targetText) {
   const t = normalize(targetText);
@@ -64,7 +68,7 @@ function getOneToFourSelects() {
   return ok;
 }
 
-// ---------- Hadley: keep it selected ----------
+// ----------------- Hadley: keep it selected -----------------
 const HADLEY_ENTITY_ID = "1748";
 
 function findHadleyRadio() {
@@ -75,42 +79,33 @@ function findHadleyRadio() {
   );
 }
 
-function trySelectHadley() {
+function ensureHadley() {
   const radio = findHadleyRadio();
   if (!radio) return false;
-  // Prefer clicking the label so the site’s JS runs
-  const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label") || radio;
-  if (!radio.checked) {
-    label && clickLikeHuman(label);
-  }
-  if (!radio.checked) {
-    radio.checked = true;
-    dispatchSelectEvents(radio);
-  }
+  // Prefer clicking label so site logic runs
+  const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label");
+  if (label) label.click();
+  if (!radio.checked) { radio.checked = true; dispatchSelectEvents(radio); }
   return radio.checked;
 }
 
-function keepHadleySelected(durationMs = 15000) {
+function keepHadleySelected(durationMs = 12000) {
   const end = Date.now() + durationMs;
-
-  // Initial burst of attempts
   (async () => {
-    for (let i = 0; i < 25 && Date.now() < end; i++) {
-      if (trySelectHadley()) break;
-      await sleep(200);
+    for (let i = 0; i < 30 && Date.now() < end; i++) {
+      if (ensureHadley()) break;
+      await sleep(150);
     }
   })();
-
-  // Watch whole doc for re-renders for a while
   const mo = new MutationObserver(() => {
     const r = findHadleyRadio();
-    if (!r || !r.checked) trySelectHadley();
+    if (!r || !r.checked) ensureHadley();
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
   setTimeout(() => mo.disconnect(), durationMs);
 }
 
-// ---------- Dates ----------
+// ----------------- Dates -----------------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
@@ -120,153 +115,165 @@ function setDateRangeISO(fromISO, toISO) {
     from.value = fromISO;
     if ("valueAsDate" in from) { const d = new Date(fromISO + "T00:00:00"); if (!isNaN(d)) from.valueAsDate = d; }
     dispatchSelectEvents(from);
-  } else { ok = false; }
+  } else ok = false;
 
   if (to) {
     to.value = toISO;
     if ("valueAsDate" in to) { const d2 = new Date(toISO + "T00:00:00"); if (!isNaN(d2)) to.valueAsDate = d2; }
     dispatchSelectEvents(to);
-  } else { ok = false; }
+  } else ok = false;
 
   console.log("[CTH/content] setDateRangeISO:", { fromISO, toISO, ok });
   return ok;
 }
 
-// ---------- Resident Name (the one under ParaPro) ----------
+// ----------------- Resident Name: API-based selection -----------------
+const STUDENT_QID = 1769;
+
+// Find the Resident question block (beneath ParaPro)
 function findResidentQuestionRoot() {
-  // Prefer the question id container if present, else fallback to the first student-select near the ParaPro question block
   return (
     document.getElementById("questions_new270026921_1769_data") ||
     document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') ||
-    document.querySelector('.student-select-search-bar')?.closest('[id^="questions_"]') ||
     null
   );
 }
 
+// Hidden input where the selected student ID must go
+function findResidentHiddenInput() {
+  return (
+    document.querySelector('input[type="hidden"][name$="[1769][data]"]') ||
+    document.querySelector('input[type="hidden"][name*="[1769][data]"]') ||
+    null
+  );
+}
+
+// Visible search input (for UX only; we will still set hidden field deterministically)
 function findResidentSearchInput() {
   const root = findResidentQuestionRoot();
-  // Exact class & attributes you provided:
-  const precise = root?.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]');
-  if (precise) return precise;
-
-  // Fallbacks (still scoped to the resident question if we found it)
   return (
+    root?.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]') ||
     root?.querySelector('.student-select-search-bar input[type="text"]') ||
-    root?.querySelector('input[type="text"][aria-label*="Search people" i]') ||
-    root?.querySelector('input[type="text"][placeholder*="Search people" i]') ||
-    // global last resort
     document.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]') ||
-    document.querySelector('.student-select-search-bar input[type="text"]') ||
     null
   );
 }
 
-// Find suggestion items *near* the resident field (local first, global fallback)
-function getResidentSuggestionItems(root) {
-  const queries = [
-    // ARIA listbox + options (most robust)
-    'ul[role="listbox"] li[role="option"]',
-    'ul[role="listbox"] li',
-    // common libraries / house classes
-    '.student-select-results li',
-    '.student-select-results .result',
-    '.student-select__results li',
-    '.ui-autocomplete li',
-    '.ui-menu-item',
-    '.select2-results__option',
-    '.dropdown-menu li',
-    '[role="option"]',
-    '.autocomplete-suggestion'
-  ];
-
-  // local search inside root/question first
-  for (const q of queries) {
-    const items = Array.from(root.querySelectorAll(q)).filter(isVisible);
-    if (items.length) return items;
+// Try to pull the search URL from the page's big data-context JSON
+function getStudentSearchUrlFromContext() {
+  try {
+    const table = document.querySelector('table.form_table.ereztable.form-display');
+    const raw = table?.getAttribute("data-context");
+    if (!raw) return null;
+    const ctx = JSON.parse(raw); // the browser decodes &quot; already
+    // Deep search for StudentQuestion with our qid
+    const stack = [ctx];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur && typeof cur === "object") {
+        if (cur.component === "StudentQuestion" && (cur.question_id === STUDENT_QID || cur.id?.includes?.(`_${STUDENT_QID}_`))) {
+          const url = cur.component_props?.search_url;
+          if (url) return url;
+        }
+        for (const k in cur) {
+          const v = cur[k];
+          if (Array.isArray(v)) v.forEach(x => stack.push(x));
+          else if (v && typeof v === "object") stack.push(v);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[CTH/content] cannot parse data-context for search_url:", e);
   }
-  // global fallback
-  for (const q of queries) {
-    const items = Array.from(document.querySelectorAll(q)).filter(isVisible);
-    if (items.length) return items;
+  return null;
+}
+
+// Build likely search URLs
+function buildStudentSearchUrls(query) {
+  const fromCtx = getStudentSearchUrlFromContext(); // e.g., "/reslife/student-select/?question_id=1769"
+  const base = fromCtx || "/reslife/student-select/?question_id=1769";
+  const sep = base.includes("?") ? "&" : "?";
+  return [
+    `${base}${sep}term=${encodeURIComponent(query)}`, // jQuery UI style
+    `${base}${sep}q=${encodeURIComponent(query)}`,    // select2 style
+  ];
+}
+
+// Normalize various result shapes into {id, text}
+function toIdTextList(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(item => {
+    const id =
+      item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id ??
+      (typeof item.value === "object" ? item.value?.id : undefined);
+    const text =
+      item.text ?? item.label ?? item.name ?? item.display ?? item.full_name ??
+      (typeof item.value === "string" ? item.value : "");
+    return id != null && text ? { id: String(id), text: String(text) } : null;
+  }).filter(Boolean);
+}
+
+async function fetchStudentResults(query) {
+  const urls = buildStudentSearchUrls(query);
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { credentials: "include", headers: { "X-Requested-With": "XMLHttpRequest" } });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") || "";
+      if (!/json/i.test(ct)) continue;
+      const data = await res.json();
+      const list = toIdTextList(data);
+      if (list.length) {
+        return list;
+      }
+    } catch (e) {
+      console.warn("[CTH/content] fetch failed", url, e);
+    }
   }
   return [];
 }
 
-function getResidentHiddenInput(root) {
+function pickBestMatch(results, query) {
+  const want = normalize(query);
   return (
-    root.querySelector('input[type="hidden"][name*="[1769][data]"]') ||
-    root.querySelector('input[type="hidden"][name$="[1769][data]"]') ||
-    null
+    results.find(r => normalize(r.text) === want) ||
+    results.find(r => normalize(r.text).startsWith(want)) ||
+    results.find(r => normalize(r.text).includes(want)) ||
+    results[0]
   );
 }
 
-async function setResidentName(query, timeoutMs = 5000) {
-  const root = findResidentQuestionRoot();
-  const input = findResidentSearchInput();
-  if (!root || !input) {
-    console.warn("[CTH/content] Resident field not found (root or input missing)");
-    return { ok: false, reason: "input_not_found" };
+async function setResidentByLookup(query) {
+  // Ensure the question is rendered (so the hidden input exists)
+  try { await waitForElement('div[id^="questions_"][id*="_1769_"][id$="_data"]', { timeout: 8000 }); } catch {}
+  const hidden = findResidentHiddenInput();
+  if (!hidden) {
+    console.warn("[CTH/content] hidden resident input not found");
+    return { ok: false, reason: "hidden_input_missing" };
   }
 
-  // Focus + type (ensure site handlers fire)
-  input.focus();
-  input.value = query;
-  fire(input, "input"); fire(input, "change");
-  // Wake up listeners
-  key(input, "keydown", "a", "KeyA"); key(input, "keyup", "a", "KeyA");
-
-  const want = normalize(query);
-  const start = performance.now();
-  let committed = false;
-
-  while (performance.now() - start < timeoutMs) {
-    // Try clicking a visible suggestion near this control
-    const items = getResidentSuggestionItems(root);
-    if (items.length) {
-      let choice =
-        items.find(el => normalize(el.textContent) === want) ||
-        items.find(el => normalize(el.textContent).startsWith(want)) ||
-        items.find(el => normalize(el.textContent).includes(want)) ||
-        items[0];
-
-      if (choice) {
-        choice.scrollIntoView({ block: "center", inline: "nearest" });
-        clickLikeHuman(choice);
-        // Also press Enter on input in case the widget expects commit via keyboard
-        key(input, "keydown", "Enter", "Enter");
-        key(input, "keyup", "Enter", "Enter");
-        fire(input, "input"); fire(input, "change");
-      }
-    } else {
-      // No items yet — nudge with ArrowDown/Enter to open/commit first result
-      key(input, "keydown", "ArrowDown", "ArrowDown");
-      key(input, "keyup", "ArrowDown", "ArrowDown");
-      key(input, "keydown", "Enter", "Enter");
-      key(input, "keyup", "Enter", "Enter");
-      fire(input, "input"); fire(input, "change");
-    }
-
-    // Check hidden input value (ideal confirmation)
-    const hid = getResidentHiddenInput(root);
-    if (hid && hid.value && String(hid.value).trim() !== "" && String(hid.value) !== "0") {
-      committed = true;
-      break;
-    }
-
-    // Heuristic: value changed (widget sometimes replaces input value with chosen name)
-    if (normalize(input.value) !== want || document.activeElement !== input) {
-      committed = true;
-      break;
-    }
-
-    await sleep(140);
+  const results = await fetchStudentResults(query);
+  if (!results.length) {
+    console.warn("[CTH/content] no student results from API for:", query);
+    return { ok: false, reason: "no_results" };
   }
 
-  console.log("[CTH/content] resident pick:", { query, committed });
-  return { ok: committed };
+  const best = pickBestMatch(results, query);
+  if (!best) return { ok: false, reason: "no_match" };
+
+  // Set the hidden id deterministically
+  hidden.value = best.id;
+  dispatchChange(hidden);
+
+  // (Optional) update visible text box so it looks selected
+  const vis = findResidentSearchInput();
+  if (vis) { vis.value = best.text; dispatchChange(vis); }
+
+  console.log("[CTH/content] resident set via API:", best);
+  return { ok: true, id: best.id, label: best.text };
 }
 
-// ---------- existing features ----------
+// ----------------- your other features -----------------
 async function pickMyNameIfEnabled() {
   try {
     const { myName = "Caporuscio, James", autoMyName = true } =
@@ -289,10 +296,8 @@ function parseSequence(seqStr) {
 function fillSequence(seqStr) {
   const nums = parseSequence(seqStr);
   if (!nums.length) return { filled: 0, total: 0 };
-
   const selects = getOneToFourSelects();
   let filled = 0;
-
   for (let i = 0; i < selects.length && i < nums.length; i++) {
     const sel = selects[i];
     const want = String(nums[i]);
@@ -302,34 +307,35 @@ function fillSequence(seqStr) {
   return { filled, total: Math.min(selects.length, nums.length) };
 }
 
-// ---------- Save button with fallbacks ----------
+// Save button with fallbacks
 function clickSaveButton() {
   const btn = document.querySelector(
     '#submit_form, button#submit_form, button[name="save"], button[type="submit"], input[type="submit"]'
   );
-  if (btn) { clickLikeHuman(btn); return { ok: true, method: "button" }; }
+  if (btn) { btn.click(); return { ok: true, method: "button" }; }
   const form = document.querySelector('form#incident_form, form[action*="FormView"], form');
   if (form) { form.submit(); return { ok: true, method: "form.submit" }; }
   return { ok: false, reason: "not_found" };
 }
 
-// ---------- boot ----------
+// ----------------- boot -----------------
 let booted = false;
 function bootOnce() {
   if (booted) return;
   booted = true;
   setTimeout(() => {
-    keepHadleySelected(15000);  // keep reapplying for a while
+    keepHadleySelected(12000);
     pickMyNameIfEnabled();
   }, 350);
 }
 bootOnce();
 
-// ---------- message bridge ----------
+// ----------------- message bridge -----------------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
-      setResidentName(msg.name).then(res => sendResponse?.(res));
+      // Deterministic: query API and set hidden id
+      setResidentByLookup(msg.name).then(res => sendResponse?.(res));
       return true; // async
 
     } else if (msg?.type === "FILL_SEQUENCE") {
@@ -346,7 +352,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
     } else if (msg?.type === "RUN_FILL") {
       pickMyNameIfEnabled();
-      keepHadleySelected(12000);
+      keepHadleySelected(8000);
       sendResponse?.({ ok: true });
       return false;
     }
