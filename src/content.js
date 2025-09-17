@@ -1,41 +1,41 @@
-// ========== content.js (deterministic resident select) ==========
+// ========== content.js (works with hidden inputs) ==========
 console.log("[CTH/content] loaded");
 
-// ----------------- small utils -----------------
+// ---------------- small utils ----------------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const fire = (el, type, init = {}) =>
   el?.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
-function dispatchChange(el) { fire(el, "input"); fire(el, "change"); }
-const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+const dispatchChange = (el) => { fire(el, "input"); fire(el, "change"); };
+const norm = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
 
-// Wait for an element (by selector) to appear under root (or document)
-function waitForElement(selector, { root = document, timeout = 8000, pollMs = 100 } = {}) {
+// Wait for element utility
+function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {}) {
   const found = root.querySelector(selector);
   if (found) return Promise.resolve(found);
   return new Promise((resolve, reject) => {
-    const obs = new MutationObserver(() => {
+    const mo = new MutationObserver(() => {
       const el = root.querySelector(selector);
-      if (el) { obs.disconnect(); resolve(el); }
+      if (el) { mo.disconnect(); resolve(el); }
     });
-    obs.observe(root, { childList: true, subtree: true });
-    const t = setTimeout(() => { obs.disconnect(); reject(new Error("timeout")); }, timeout);
-    (async function poll() {
-      for (let i = 0; i < timeout / pollMs; i++) {
+    mo.observe(root, { childList: true, subtree: true });
+    const t = setTimeout(() => { mo.disconnect(); reject(new Error("timeout")); }, timeout);
+    (async function p() {
+      for (let i = 0; i < timeout / poll; i++) {
         const el = root.querySelector(selector);
-        if (el) { clearTimeout(t); obs.disconnect(); return resolve(el); }
-        await sleep(pollMs);
+        if (el) { clearTimeout(t); mo.disconnect(); return resolve(el); }
+        await sleep(poll);
       }
     })();
   });
 }
 
-// ----------------- select helpers you had -----------------
+// ---------------- select helpers (yours) ----------------
 function dispatchSelectEvents(sel) { dispatchChange(sel); }
 
 function selectOptionByText(selectEl, targetText) {
-  const t = normalize(targetText);
+  const t = norm(targetText);
   const opts = Array.from(selectEl?.options || []);
-  const found = opts.find(o => normalize(o.textContent || o.label) === t);
+  const found = opts.find(o => norm(o.textContent || o.label) === t);
   if (!found) return false;
   selectEl.value = found.value;
   dispatchSelectEvents(selectEl);
@@ -68,10 +68,10 @@ function getOneToFourSelects() {
   return ok;
 }
 
-// ----------------- Hadley: keep it selected -----------------
+// ---------------- Hadley: keep it selected ----------------
 const HADLEY_ENTITY_ID = "1748";
 
-function findHadleyRadio() {
+function hadleyRadio() {
   return (
     document.querySelector(`input[type="radio"][name="answers[gensec][location]"][value="${HADLEY_ENTITY_ID}"]`) ||
     Array.from(document.querySelectorAll('input[type="radio"][name="answers[gensec][location]"]'))
@@ -79,33 +79,32 @@ function findHadleyRadio() {
   );
 }
 
-function ensureHadley() {
-  const radio = findHadleyRadio();
-  if (!radio) return false;
-  // Prefer clicking label so site logic runs
-  const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label");
-  if (label) label.click();
-  if (!radio.checked) { radio.checked = true; dispatchSelectEvents(radio); }
-  return radio.checked;
+function selectHadleyOnce() {
+  const r = hadleyRadio();
+  if (!r) return false;
+  const lbl = document.querySelector(`label[for="${r.id}"]`) || r.closest("label");
+  if (lbl) lbl.click();
+  if (!r.checked) { r.checked = true; dispatchSelectEvents(r); }
+  return r.checked;
 }
 
-function keepHadleySelected(durationMs = 12000) {
-  const end = Date.now() + durationMs;
+function keepHadleySelected(ms = 12000) {
+  const end = Date.now() + ms;
   (async () => {
     for (let i = 0; i < 30 && Date.now() < end; i++) {
-      if (ensureHadley()) break;
+      if (selectHadleyOnce()) break;
       await sleep(150);
     }
   })();
   const mo = new MutationObserver(() => {
-    const r = findHadleyRadio();
-    if (!r || !r.checked) ensureHadley();
+    const r = hadleyRadio();
+    if (!r || !r.checked) selectHadleyOnce();
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
-  setTimeout(() => mo.disconnect(), durationMs);
+  setTimeout(() => mo.disconnect(), ms);
 }
 
-// ----------------- Dates -----------------
+// ---------------- Dates ----------------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
@@ -127,53 +126,53 @@ function setDateRangeISO(fromISO, toISO) {
   return ok;
 }
 
-// ----------------- Resident Name: API-based selection -----------------
+// ---------------- Resident Name (deterministic via hidden inputs) ----------------
 const STUDENT_QID = 1769;
 
-// Find the Resident question block (beneath ParaPro)
-function findResidentQuestionRoot() {
+// Find the resident question subtree (beneath ParaPro)
+function residentRoot() {
   return (
     document.getElementById("questions_new270026921_1769_data") ||
-    document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') ||
-    null
+    document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') || // flexible
+    document.querySelector('.question-type--student') || // generic fallback
+    document
   );
 }
 
-// Hidden input where the selected student ID must go
-function findResidentHiddenInput() {
-  return (
-    document.querySelector('input[type="hidden"][name$="[1769][data]"]') ||
-    document.querySelector('input[type="hidden"][name*="[1769][data]"]') ||
-    null
-  );
+// Find the two critical hidden inputs in that row
+function residentHiddenId(root = residentRoot()) {
+  return root.querySelector('input[type="hidden"].student-field-value-hidden[name$="[1769][data]"], input[type="hidden"][name$="[1769][data]"]');
+}
+function residentSelectedFlag(root = residentRoot()) {
+  return root.querySelector('input[type="hidden"].student_selected') || root.querySelector('input[type="hidden"][name$="[selected]"]');
 }
 
-// Visible search input (for UX only; we will still set hidden field deterministically)
-function findResidentSearchInput() {
-  const root = findResidentQuestionRoot();
-  return (
-    root?.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]') ||
-    root?.querySelector('.student-select-search-bar input[type="text"]') ||
-    document.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]') ||
-    null
-  );
+// Visible bits (best-effort cosmetic update)
+function residentSearchInput(root = residentRoot()) {
+  return root.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]')
+      || root.querySelector('.student-select-search-bar input[type="text"]');
+}
+function residentDisplayContainer(root = residentRoot()) {
+  return root.querySelector('.student-selected-container') || root.querySelector('#questions_new270026921_1769_data');
+}
+function clearWarning(root = residentRoot()) {
+  const warn = root.querySelector('.alert.alert-warning');
+  if (warn) warn.style.display = 'none';
 }
 
-// Try to pull the search URL from the page's big data-context JSON
+// Pull search URL from data-context (authoritative)
 function getStudentSearchUrlFromContext() {
   try {
     const table = document.querySelector('table.form_table.ereztable.form-display');
     const raw = table?.getAttribute("data-context");
     if (!raw) return null;
-    const ctx = JSON.parse(raw); // the browser decodes &quot; already
-    // Deep search for StudentQuestion with our qid
+    const ctx = JSON.parse(raw);
     const stack = [ctx];
     while (stack.length) {
       const cur = stack.pop();
       if (cur && typeof cur === "object") {
-        if (cur.component === "StudentQuestion" && (cur.question_id === STUDENT_QID || cur.id?.includes?.(`_${STUDENT_QID}_`))) {
-          const url = cur.component_props?.search_url;
-          if (url) return url;
+        if (cur.component === "StudentQuestion" && (cur.question_id === STUDENT_QID)) {
+          return cur.component_props?.search_url || null;
         }
         for (const k in cur) {
           const v = cur[k];
@@ -183,23 +182,21 @@ function getStudentSearchUrlFromContext() {
       }
     }
   } catch (e) {
-    console.warn("[CTH/content] cannot parse data-context for search_url:", e);
+    console.warn("[CTH/content] data-context parse failed", e);
   }
   return null;
 }
 
-// Build likely search URLs
 function buildStudentSearchUrls(query) {
-  const fromCtx = getStudentSearchUrlFromContext(); // e.g., "/reslife/student-select/?question_id=1769"
-  const base = fromCtx || "/reslife/student-select/?question_id=1769";
+  const base = getStudentSearchUrlFromContext() || "/reslife/student-select/?question_id=1769";
   const sep = base.includes("?") ? "&" : "?";
   return [
-    `${base}${sep}term=${encodeURIComponent(query)}`, // jQuery UI style
-    `${base}${sep}q=${encodeURIComponent(query)}`,    // select2 style
+    `${base}${sep}term=${encodeURIComponent(query)}`,
+    `${base}${sep}q=${encodeURIComponent(query)}`
   ];
 }
 
-// Normalize various result shapes into {id, text}
+// Normalize API results to {id, text}
 function toIdTextList(arr) {
   if (!Array.isArray(arr)) return [];
   return arr.map(item => {
@@ -209,7 +206,7 @@ function toIdTextList(arr) {
     const text =
       item.text ?? item.label ?? item.name ?? item.display ?? item.full_name ??
       (typeof item.value === "string" ? item.value : "");
-    return id != null && text ? { id: String(id), text: String(text) } : null;
+    return (id != null && text) ? { id: String(id), text: String(text) } : null;
   }).filter(Boolean);
 }
 
@@ -223,57 +220,72 @@ async function fetchStudentResults(query) {
       if (!/json/i.test(ct)) continue;
       const data = await res.json();
       const list = toIdTextList(data);
-      if (list.length) {
-        return list;
-      }
+      if (list.length) return list;
     } catch (e) {
-      console.warn("[CTH/content] fetch failed", url, e);
+      console.warn("[CTH/content] fetch student failed", url, e);
     }
   }
   return [];
 }
 
-function pickBestMatch(results, query) {
-  const want = normalize(query);
+function pickBest(results, query) {
+  const q = norm(query);
   return (
-    results.find(r => normalize(r.text) === want) ||
-    results.find(r => normalize(r.text).startsWith(want)) ||
-    results.find(r => normalize(r.text).includes(want)) ||
+    results.find(r => norm(r.text) === q) ||
+    results.find(r => norm(r.text).startsWith(q)) ||
+    results.find(r => norm(r.text).includes(q)) ||
     results[0]
   );
 }
 
-async function setResidentByLookup(query) {
-  // Ensure the question is rendered (so the hidden input exists)
-  try { await waitForElement('div[id^="questions_"][id*="_1769_"][id$="_data"]', { timeout: 8000 }); } catch {}
-  const hidden = findResidentHiddenInput();
-  if (!hidden) {
-    console.warn("[CTH/content] hidden resident input not found");
-    return { ok: false, reason: "hidden_input_missing" };
+function populateResidentFields({ id, text }) {
+  const root = residentRoot();
+  const hid = residentHiddenId(root);
+  const flag = residentSelectedFlag(root);
+
+  if (!hid) {
+    console.warn("[CTH/content] resident hidden [1769][data] not found");
+    return false;
   }
 
-  const results = await fetchStudentResults(query);
-  if (!results.length) {
-    console.warn("[CTH/content] no student results from API for:", query);
-    return { ok: false, reason: "no_results" };
+  hid.value = String(id);
+  dispatchChange(hid);
+
+  if (flag) {
+    flag.value = "1";
+    dispatchChange(flag);
   }
 
-  const best = pickBestMatch(results, query);
-  if (!best) return { ok: false, reason: "no_match" };
+  // Cosmetic: update visible display & input
+  const disp = residentDisplayContainer(root);
+  if (disp && !disp.querySelector("a")) {
+    const a = document.createElement("a");
+    // Their links look like /person/lastname-<id>/. We don't know slug, so link to /person/<id>/ fallback:
+    a.href = `/person/${id}/`;
+    a.target = "_blank";
+    a.textContent = text;
+    disp.innerHTML = "";
+    disp.appendChild(a);
+  }
+  const vis = residentSearchInput(root);
+  if (vis) { vis.value = text; dispatchChange(vis); }
 
-  // Set the hidden id deterministically
-  hidden.value = best.id;
-  dispatchChange(hidden);
-
-  // (Optional) update visible text box so it looks selected
-  const vis = findResidentSearchInput();
-  if (vis) { vis.value = best.text; dispatchChange(vis); }
-
-  console.log("[CTH/content] resident set via API:", best);
-  return { ok: true, id: best.id, label: best.text };
+  clearWarning(root);
+  console.log("[CTH/content] Resident set:", { id, text });
+  return true;
 }
 
-// ----------------- your other features -----------------
+async function setResidentByName(query) {
+  // ensure the question exists so hidden inputs are in DOM
+  try { await waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 8000 }); } catch {}
+  const results = await fetchStudentResults(query);
+  if (!results.length) return { ok: false, reason: "no_results" };
+  const best = pickBest(results, query);
+  const ok = populateResidentFields(best);
+  return ok ? { ok: true, id: best.id, label: best.text } : { ok: false, reason: "populate_failed" };
+}
+
+// ---------------- existing features ----------------
 async function pickMyNameIfEnabled() {
   try {
     const { myName = "Caporuscio, James", autoMyName = true } =
@@ -318,7 +330,7 @@ function clickSaveButton() {
   return { ok: false, reason: "not_found" };
 }
 
-// ----------------- boot -----------------
+// ---------------- boot ----------------
 let booted = false;
 function bootOnce() {
   if (booted) return;
@@ -330,12 +342,11 @@ function bootOnce() {
 }
 bootOnce();
 
-// ----------------- message bridge -----------------
+// ---------------- message bridge ----------------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
-      // Deterministic: query API and set hidden id
-      setResidentByLookup(msg.name).then(res => sendResponse?.(res));
+      setResidentByName(msg.name).then(res => sendResponse?.(res));
       return true; // async
 
     } else if (msg?.type === "FILL_SEQUENCE") {
