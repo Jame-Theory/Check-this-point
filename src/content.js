@@ -1,46 +1,31 @@
-// ========== content.js (CTH) ==========
+// ========== content.js ==========
 console.log("[CTH/content] loaded");
 
-// ---------- tiny utils ----------
+// ---------- small utils ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const fire = (el, type, init = {}) =>
   el?.dispatchEvent(new Event(type, { bubbles: true, cancelable: true, ...init }));
 const key = (el, type, k, code = k) =>
   el?.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true }));
-const clickLikeHuman = (el) => {
+const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+function isVisible(el) {
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  return !!(el.offsetParent || el.getClientRects().length) && rect.width >= 1 && rect.height >= 1;
+}
+
+function clickLikeHuman(el) {
   if (!el) return;
   const r = el.getBoundingClientRect();
-  const x = r.left + Math.min(Math.max(4, r.width / 2), r.width - 4);
-  const y = r.top + Math.min(Math.max(4, r.height / 2), r.height - 4);
+  const x = r.left + Math.max(6, Math.min(r.width - 6, r.width / 2));
+  const y = r.top + Math.max(6, Math.min(r.height - 6, r.height / 2));
   for (const t of ["pointerdown", "mousedown", "mouseup", "click"]) {
     el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
   }
-};
-const normalize = (s) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
-
-// Generic element waiter (scoped)
-function waitForElement(selector, { root = document, timeout = 6000, pollMs = 100 } = {}) {
-  const found = root.querySelector(selector);
-  if (found) return Promise.resolve(found);
-  return new Promise((resolve, reject) => {
-    const obs = new MutationObserver(() => {
-      const el = root.querySelector(selector);
-      if (el) { obs.disconnect(); resolve(el); }
-    });
-    obs.observe(root, { subtree: true, childList: true });
-    const t = setTimeout(() => { obs.disconnect(); reject(new Error("timeout")); }, timeout);
-    // also poll in case mutations are throttled
-    (async function poll() {
-      for (let i = 0; i < timeout / pollMs; i++) {
-        const el = root.querySelector(selector);
-        if (el) { clearTimeout(t); obs.disconnect(); return resolve(el); }
-        await sleep(pollMs);
-      }
-    })();
-  });
 }
 
-// ---------- select helpers (original logic) ----------
+// ---------- your existing select helpers ----------
 function dispatchSelectEvents(el) { fire(el, "input"); fire(el, "change"); }
 
 function selectOptionByText(selectEl, targetText) {
@@ -52,6 +37,7 @@ function selectOptionByText(selectEl, targetText) {
   dispatchSelectEvents(selectEl);
   return true;
 }
+
 function looksLikePeopleSelect(sel) {
   const opts = Array.from(sel.options);
   if (opts.length < 5) return false;
@@ -59,12 +45,14 @@ function looksLikePeopleSelect(sel) {
   const hasDashSelect = opts.some(o => (o.textContent || "").toLowerCase().includes("- select"));
   return hasCommaNames || hasDashSelect;
 }
+
 function getParaProSelects() {
-  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro
+  const byName = document.querySelectorAll('select[name$="[1820][data]"]'); // ParaPro field
   const all = Array.from(document.querySelectorAll("select"));
   const peopleish = all.filter(looksLikePeopleSelect);
   return Array.from(new Set([...byName, ...peopleish]));
 }
+
 function getOneToFourSelects() {
   const ok = [];
   document.querySelectorAll("select").forEach(sel => {
@@ -76,71 +64,58 @@ function getOneToFourSelects() {
   return ok;
 }
 
-// ---------- Auto-select Hadley (sticky) ----------
-const HADLEY_ENTITY_ID = "1748"; // Hadley Village (from page data)
+// ---------- Hadley: keep it selected ----------
+const HADLEY_ENTITY_ID = "1748";
 
-function findResidenceContainer() {
-  // ID from page dump; fallback to nearest table row containing the question label
-  return document.getElementById("gensec_location") ||
-         document.querySelector('[name="answers[gensec][location]"]')?.closest("table,fieldset,div") ||
-         document;
-}
-
-function findHadleyRadio(container = document) {
+function findHadleyRadio() {
   return (
-    container.querySelector(`input[type="radio"][name="answers[gensec][location]"][value="${HADLEY_ENTITY_ID}"]`) ||
-    Array.from(container.querySelectorAll('input[type="radio"][name="answers[gensec][location]"]'))
+    document.querySelector(`input[type="radio"][name="answers[gensec][location]"][value="${HADLEY_ENTITY_ID}"]`) ||
+    Array.from(document.querySelectorAll('input[type="radio"][name="answers[gensec][location]"]'))
       .find(r => r.value === HADLEY_ENTITY_ID || /hadley\s+village/i.test(r.closest("label")?.textContent || ""))
   );
 }
 
-async function stickHadley({ durationMs = 8000, root = null } = {}) {
-  const container = root || findResidenceContainer();
-  try {
-    // Wait for the radios to actually exist
-    await waitForElement('input[type="radio"][name="answers[gensec][location]"]', { root: container, timeout: 8000 });
-  } catch {}
-  const until = Date.now() + durationMs;
-
-  const trySet = () => {
-    const radio = findHadleyRadio(container);
-    if (!radio) return false;
-    const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label") || radio;
-    if (!radio.checked) {
-      // Click label to trigger framework handlers
-      label && clickLikeHuman(label);
-      // Safety net: ensure checked + change
-      if (!radio.checked) { radio.checked = true; dispatchSelectEvents(radio); }
-    }
-    return radio.checked;
-  };
-
-  // initial attempts with small backoff
-  let ok = false;
-  for (let i = 0; i < 10 && Date.now() < until; i++) {
-    ok = trySet();
-    if (ok) break;
-    await sleep(150);
+function trySelectHadley() {
+  const radio = findHadleyRadio();
+  if (!radio) return false;
+  // Prefer clicking the label so the site’s JS runs
+  const label = document.querySelector(`label[for="${radio.id}"]`) || radio.closest("label") || radio;
+  if (!radio.checked) {
+    label && clickLikeHuman(label);
   }
-
-  // Watch for re-renders within the window and re-apply if needed
-  const mo = new MutationObserver(() => {
-    const r = findHadleyRadio(container);
-    if (!r || !r.checked) trySet();
-  });
-  mo.observe(container === document ? document.documentElement : container, { childList: true, subtree: true });
-  setTimeout(() => mo.disconnect(), durationMs);
-
-  console.log("[CTH/content] Hadley selected:", ok);
-  return ok;
+  if (!radio.checked) {
+    radio.checked = true;
+    dispatchSelectEvents(radio);
+  }
+  return radio.checked;
 }
 
-// ---------- Date range setter ----------
+function keepHadleySelected(durationMs = 15000) {
+  const end = Date.now() + durationMs;
+
+  // Initial burst of attempts
+  (async () => {
+    for (let i = 0; i < 25 && Date.now() < end; i++) {
+      if (trySelectHadley()) break;
+      await sleep(200);
+    }
+  })();
+
+  // Watch whole doc for re-renders for a while
+  const mo = new MutationObserver(() => {
+    const r = findHadleyRadio();
+    if (!r || !r.checked) trySelectHadley();
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => mo.disconnect(), durationMs);
+}
+
+// ---------- Dates ----------
 function setDateRangeISO(fromISO, toISO) {
   const from = document.querySelector('input[name="answers[gensec][form_date][from]"]');
   const to   = document.querySelector('input[name="answers[gensec][form_date][to]"]');
-
   let ok = true;
+
   if (from) {
     from.value = fromISO;
     if ("valueAsDate" in from) { const d = new Date(fromISO + "T00:00:00"); if (!isNaN(d)) from.valueAsDate = d; }
@@ -157,35 +132,45 @@ function setDateRangeISO(fromISO, toISO) {
   return ok;
 }
 
-// ---------- Resident Name (beneath ParaPro, qid: 1769) ----------
+// ---------- Resident Name (the one under ParaPro) ----------
 function findResidentQuestionRoot() {
-  // Exact id from your dump, plus a flexible fallback that matches *_1769_*_data
+  // Prefer the question id container if present, else fallback to the first student-select near the ParaPro question block
   return (
     document.getElementById("questions_new270026921_1769_data") ||
     document.querySelector('div[id^="questions_"][id*="_1769_"][id$="_data"]') ||
+    document.querySelector('.student-select-search-bar')?.closest('[id^="questions_"]') ||
     null
   );
 }
 
-function findResidentInput() {
+function findResidentSearchInput() {
   const root = findResidentQuestionRoot();
-  if (!root) return null;
+  // Exact class & attributes you provided:
+  const precise = root?.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]');
+  if (precise) return precise;
+
+  // Fallbacks (still scoped to the resident question if we found it)
   return (
-    // typical text input
-    root.querySelector('input[type="text"]') ||
-    // ARIA combobox flavors
-    root.querySelector('input[role="combobox"]') ||
-    root.querySelector('input[aria-autocomplete]') ||
-    // any input inside the question row
-    root.querySelector("input")
+    root?.querySelector('.student-select-search-bar input[type="text"]') ||
+    root?.querySelector('input[type="text"][aria-label*="Search people" i]') ||
+    root?.querySelector('input[type="text"][placeholder*="Search people" i]') ||
+    // global last resort
+    document.querySelector('.student-select-search-bar input[type="text"][aria-label="Search people"][placeholder="Search people"]') ||
+    document.querySelector('.student-select-search-bar input[type="text"]') ||
+    null
   );
 }
 
-function visibleOptionsNear(root) {
-  // search *near the question root* first, then global fallback
-  const NEAR_QUERIES = [
+// Find suggestion items *near* the resident field (local first, global fallback)
+function getResidentSuggestionItems(root) {
+  const queries = [
+    // ARIA listbox + options (most robust)
     'ul[role="listbox"] li[role="option"]',
     'ul[role="listbox"] li',
+    // common libraries / house classes
+    '.student-select-results li',
+    '.student-select-results .result',
+    '.student-select__results li',
     '.ui-autocomplete li',
     '.ui-menu-item',
     '.select2-results__option',
@@ -193,73 +178,92 @@ function visibleOptionsNear(root) {
     '[role="option"]',
     '.autocomplete-suggestion'
   ];
-  for (const q of NEAR_QUERIES) {
-    const within = Array.from(root.querySelectorAll(q)).filter(el => el.offsetParent !== null);
-    if (within.length) return within;
+
+  // local search inside root/question first
+  for (const q of queries) {
+    const items = Array.from(root.querySelectorAll(q)).filter(isVisible);
+    if (items.length) return items;
   }
-  // global fallback if the widget renders the list outside of the question subtree
-  for (const q of NEAR_QUERIES) {
-    const global = Array.from(document.querySelectorAll(q)).filter(el => el.offsetParent !== null);
-    if (global.length) return global;
+  // global fallback
+  for (const q of queries) {
+    const items = Array.from(document.querySelectorAll(q)).filter(isVisible);
+    if (items.length) return items;
   }
   return [];
 }
 
+function getResidentHiddenInput(root) {
+  return (
+    root.querySelector('input[type="hidden"][name*="[1769][data]"]') ||
+    root.querySelector('input[type="hidden"][name$="[1769][data]"]') ||
+    null
+  );
+}
+
 async function setResidentName(query, timeoutMs = 5000) {
   const root = findResidentQuestionRoot();
-  const input = findResidentInput();
+  const input = findResidentSearchInput();
   if (!root || !input) {
-    console.warn("[CTH/content] Resident field not found near qid 1769");
+    console.warn("[CTH/content] Resident field not found (root or input missing)");
     return { ok: false, reason: "input_not_found" };
   }
 
-  // Focus + type
+  // Focus + type (ensure site handlers fire)
   input.focus();
   input.value = query;
   fire(input, "input"); fire(input, "change");
-  // nudge listeners
+  // Wake up listeners
   key(input, "keydown", "a", "KeyA"); key(input, "keyup", "a", "KeyA");
 
   const want = normalize(query);
   const start = performance.now();
+  let committed = false;
 
   while (performance.now() - start < timeoutMs) {
-    // Prefer clicking a visible suggestion close to the question
-    const items = visibleOptionsNear(root);
+    // Try clicking a visible suggestion near this control
+    const items = getResidentSuggestionItems(root);
     if (items.length) {
       let choice =
         items.find(el => normalize(el.textContent) === want) ||
         items.find(el => normalize(el.textContent).startsWith(want)) ||
         items.find(el => normalize(el.textContent).includes(want)) ||
         items[0];
+
       if (choice) {
         choice.scrollIntoView({ block: "center", inline: "nearest" });
         clickLikeHuman(choice);
-        // some widgets need Enter on input to commit
+        // Also press Enter on input in case the widget expects commit via keyboard
         key(input, "keydown", "Enter", "Enter");
         key(input, "keyup", "Enter", "Enter");
         fire(input, "input"); fire(input, "change");
-        return { ok: true, via: "list", chosen: (choice.textContent || "").trim() };
       }
+    } else {
+      // No items yet — nudge with ArrowDown/Enter to open/commit first result
+      key(input, "keydown", "ArrowDown", "ArrowDown");
+      key(input, "keyup", "ArrowDown", "ArrowDown");
+      key(input, "keydown", "Enter", "Enter");
+      key(input, "keyup", "Enter", "Enter");
+      fire(input, "input"); fire(input, "change");
     }
 
-    // Keyboard-first fallback (works on many ARIA comboboxes)
-    key(input, "keydown", "ArrowDown", "ArrowDown");
-    key(input, "keyup", "ArrowDown", "ArrowDown");
-    key(input, "keydown", "Enter", "Enter");
-    key(input, "keyup", "Enter", "Enter");
-    fire(input, "input"); fire(input, "change");
-
-    // Heuristic: if input value changed or focus moved, consider it committed
-    if (document.activeElement !== input || normalize(input.value) !== normalize(query)) {
-      return { ok: true, via: "kbd", value: input.value };
+    // Check hidden input value (ideal confirmation)
+    const hid = getResidentHiddenInput(root);
+    if (hid && hid.value && String(hid.value).trim() !== "" && String(hid.value) !== "0") {
+      committed = true;
+      break;
     }
 
-    await sleep(120);
+    // Heuristic: value changed (widget sometimes replaces input value with chosen name)
+    if (normalize(input.value) !== want || document.activeElement !== input) {
+      committed = true;
+      break;
+    }
+
+    await sleep(140);
   }
 
-  console.warn("[CTH/content] Resident selection did not commit");
-  return { ok: false, reason: "no_commit" };
+  console.log("[CTH/content] resident pick:", { query, committed });
+  return { ok: committed };
 }
 
 // ---------- existing features ----------
@@ -281,11 +285,14 @@ async function pickMyNameIfEnabled() {
 function parseSequence(seqStr) {
   return Array.from(seqStr || "").filter(ch => /[1-4]/.test(ch)).map(d => Number(d));
 }
+
 function fillSequence(seqStr) {
   const nums = parseSequence(seqStr);
   if (!nums.length) return { filled: 0, total: 0 };
+
   const selects = getOneToFourSelects();
   let filled = 0;
+
   for (let i = 0; i < selects.length && i < nums.length; i++) {
     const sel = selects[i];
     const want = String(nums[i]);
@@ -311,26 +318,18 @@ let booted = false;
 function bootOnce() {
   if (booted) return;
   booted = true;
-  // Give the site time to render, then keep Hadley sticky for a bit
   setTimeout(() => {
-    stickHadley({ durationMs: 9000 });
+    keepHadleySelected(15000);  // keep reapplying for a while
     pickMyNameIfEnabled();
   }, 350);
 }
 bootOnce();
 
-// ---------- bridge ----------
+// ---------- message bridge ----------
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   try {
     if (msg?.type === "PICK_NAME") {
-      // Prefer the Resident field under ParaPro first
-      setResidentName(msg.name).then(res => {
-        if (res?.ok) return sendResponse?.(res);
-        // fallback: try ParaPro selects if resident field wasn't found/committed
-        const sels = getParaProSelects();
-        for (const sel of sels) { if (selectOptionByText(sel, msg.name)) return sendResponse?.({ ok: true, via: "select" }); }
-        sendResponse?.({ ok: false });
-      });
+      setResidentName(msg.name).then(res => sendResponse?.(res));
       return true; // async
 
     } else if (msg?.type === "FILL_SEQUENCE") {
@@ -340,7 +339,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse?.(clickSaveButton()); return false;
 
     } else if (msg?.type === "SET_DATE") {
-      // Accept either {from,to} or {date}
       const from = msg.from || msg.date;
       const to   = msg.to   || msg.date || msg.from;
       sendResponse?.({ ok: setDateRangeISO(from, to || from) });
@@ -348,7 +346,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
     } else if (msg?.type === "RUN_FILL") {
       pickMyNameIfEnabled();
-      stickHadley({ durationMs: 6000 });
+      keepHadleySelected(12000);
       sendResponse?.({ ok: true });
       return false;
     }
