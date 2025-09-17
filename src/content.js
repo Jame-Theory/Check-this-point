@@ -1,4 +1,4 @@
-// ========== content.js (pagination-aware results + verbose logs) ==========
+// ========== content.js (UI-driven resident select + verbose logs) ==========
 console.log("[CTH] content.js loaded");
 
 // ---------- small utils ----------
@@ -15,7 +15,7 @@ function waitFor(selector, { root = document, timeout = 8000, poll = 100 } = {})
   return new Promise((resolve, reject) => {
     const mo = new MutationObserver(() => {
       const el = root.querySelector(selector);
-      if (el) { mo.disconnect(); resolve(el); }
+      if (el) { clearTimeout(t); mo.disconnect(); resolve(el); }
     });
     mo.observe(root, { childList: true, subtree: true });
     const t = setTimeout(() => { mo.disconnect(); reject(new Error("timeout")); }, timeout);
@@ -109,7 +109,7 @@ function setDateRangeISO(fromISO, toISO) {
   return ok;
 }
 
-// ---------- Resident (API + hidden inputs, pagination-aware) ----------
+// ---------- Resident selection (UI-driven) ----------
 const STUDENT_QID = 1769;
 
 function residentRoot() {
@@ -121,7 +121,8 @@ function residentRoot() {
   );
 }
 function residentHiddenId(root = residentRoot()) {
-  return root.querySelector('input[type="hidden"].student-field-value-hidden[name$="[1769][data]"], input[type="hidden"][name$="[1769][data]"]');
+  // broadened: any hidden input whose name contains [1769]
+  return root.querySelector('input[type="hidden"][name*="[1769]"]');
 }
 function residentSelectedFlag(root = residentRoot()) {
   return root.querySelector('input[type="hidden"].student_selected') || root.querySelector('input[type="hidden"][name$="[selected]"]');
@@ -132,251 +133,92 @@ function residentDisplayContainer(root = residentRoot()) {
 function residentSearchInput(root = residentRoot()) {
   return root.querySelector('.student-select-search-bar input[type="text"]');
 }
+function residentDropdownItems(doc = document) {
+  // cover common autocomplete menus
+  return Array.from(doc.querySelectorAll(
+    'ul[role="listbox"] li[role="option"], ul[role="listbox"] li, .ui-autocomplete li, .ui-menu-item, .select2-results__option, .dropdown-menu li'
+  ));
+}
 function residentClearButton(root = residentRoot()) {
   return root.querySelector('.action-bar .clear-selected, button.clear-selected');
 }
 function clearResidentUI(root = residentRoot()) {
   console.log("[CTH/resident] Clearing existing resident UI/hidden values");
-  const btn = residentClearButton(root);
-  if (btn) { btn.click(); }
+  try { residentClearButton(root)?.click(); } catch {}
   const hid = residentHiddenId(root); if (hid) { hid.value = ""; change(hid); }
   const flag = residentSelectedFlag(root); if (flag) { flag.value = "0"; change(flag); }
   const vis = residentSearchInput(root); if (vis) { vis.value = ""; change(vis); }
   const disp = residentDisplayContainer(root); if (disp) disp.innerHTML = "";
 }
 
-function getStudentSearchUrlFromContext() {
-  try {
-    const table = document.querySelector('table.form_table.ereztable.form-display');
-    const raw = table?.getAttribute("data-context");
-    if (!raw) return null;
-    const ctx = JSON.parse(raw);
-    const stack = [ctx];
-    while (stack.length) {
-      const cur = stack.pop();
-      if (cur && typeof cur === "object") {
-        if (cur.component === "StudentQuestion" && (cur.question_id === STUDENT_QID)) {
-          const u = cur.component_props?.search_url || null;
-          console.log("[CTH/resident] search_url from context:", u);
-          return u;
-        }
-        for (const k in cur) {
-          const v = cur[k];
-          if (Array.isArray(v)) v.forEach(x => stack.push(x));
-          else if (v && typeof v === "object") stack.push(v);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("[CTH/resident] data-context parse failed", e);
-  }
-  return null;
-}
-
-// Append a larger page size to reduce pagination churn
-function withPageSize(urlStr, n = 50) {
-  try {
-    const u = new URL(urlStr, location.origin);
-    if (!u.searchParams.has("page_size")) u.searchParams.set("page_size", String(n));
-    return u.pathname + u.search;
-  } catch {
-    return urlStr + (urlStr.includes("?") ? "&" : "?") + "page_size=" + n;
-  }
-}
-
-function buildStudentSearchUrls(query) {
-  const base = getStudentSearchUrlFromContext() || "/reslife/student-select/?question_id=1769";
-  const sep = base.includes("?") ? "&" : "?";
-  const urls = [
-    withPageSize(`${base}${sep}term=${encodeURIComponent(query)}`),
-    withPageSize(`${base}${sep}q=${encodeURIComponent(query)}`)
-  ];
-  console.log("[CTH/resident] candidate URLs:", urls);
-  return urls;
-}
-
-// Normalize various JSON formats into [{id,text}]
-function toIdTextListFromJson(data) {
-  // If the API returns {count, next, results:[...]}
-  if (data && typeof data === "object" && Array.isArray(data.results)) {
-    const list = data.results.map(item => {
-      const id =
-        item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id;
-      const last = item.last_name || item.lastName || item.surname || "";
-      const first = item.first_name || item.firstName || item.given_name || item.preferred_name || "";
-      const display = item.display || item.text || item.label || item.name;
-      const text = display || [last, first].filter(Boolean).join(", ").trim();
-      return (id != null && text) ? { id: String(id), text: String(text) } : null;
-    }).filter(Boolean);
-    console.log("[CTH/resident] normalized list (paged JSON):", list);
-    return list;
-  }
-  // If the API returns a plain list/array
-  if (Array.isArray(data)) {
-    const list = data.map(item => {
-      const id =
-        item.id ?? item.value ?? item.pk ?? item.user_id ?? item.person_id ?? item.student_id ??
-        (typeof item.value === "object" ? item.value?.id : undefined);
-      const last = item.last_name || item.lastName || "";
-      const first = item.first_name || item.firstName || item.preferred_name || "";
-      const display = item.display || item.text || item.label || item.name;
-      const text = display || [last, first].filter(Boolean).join(", ").trim();
-      return (id != null && text) ? { id: String(id), text: String(text) } : null;
-    }).filter(Boolean);
-    console.log("[CTH/resident] normalized list (array JSON):", list);
-    return list;
-  }
-  console.log("[CTH/resident] JSON not recognized:", data);
-  return [];
-}
-
-async function fetchStudentResults(query) {
-  const urls = buildStudentSearchUrls(query);
-  const tried = [];
-
-  function parseHtmlToList(html) {
-    try {
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      const items = Array.from(doc.querySelectorAll(
-        'ul[role="listbox"] li[role="option"], ul[role="listbox"] li, .ui-autocomplete li, .ui-menu-item, .select2-results__option, .dropdown-menu li, li'
-      ));
-      const list = items.map(li => {
-        const text = (li.textContent || "").trim();
-        const idAttr =
-          li.getAttribute("data-id") ||
-          li.getAttribute("data-value") ||
-          li.getAttribute("data-user-id") ||
-          li.getAttribute("data-person-id") ||
-          li.getAttribute("data-id-student") ||
-          null;
-        let id = idAttr;
-        if (!id) {
-          for (const a of li.attributes) {
-            if (a.name.startsWith("data-") && /\d{3,}/.test(a.value)) { id = a.value.match(/\d{3,}/)[0]; break; }
-          }
-        }
-        return (id && text) ? { id: String(id), text } : null;
-      }).filter(Boolean);
-      console.log("[CTH/resident] parsed HTML list:", list);
-      return list;
-    } catch (e) {
-      console.warn("[CTH/resident] HTML parse failed:", e);
-      return [];
-    }
-  }
-
-  // GET tries (use JSON, fallback to HTML)
-  for (const url of urls) {
-    try {
-      console.log("[CTH/resident] FETCH GET:", url);
-      const res = await fetch(url, {
-        credentials: "include",
-        headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/html;q=0.9,*/*;q=0.8" },
-        method: "GET"
-      });
-      const ct = res.headers.get("content-type") || "";
-      const status = res.status;
-      console.log("[CTH/resident] GET status/content-type:", status, ct);
-      const txt = await res.text();
-      console.log("[CTH/resident] GET body preview:", txt.slice(0, 200).replace(/\n/g, "\\n"));
-      if (!res.ok) { tried.push({ url, method: "GET", status }); continue; }
-
-      if (/json/i.test(ct)) {
-        const data = JSON.parse(txt);
-        const list = toIdTextListFromJson(data);
-        if (list.length) return list;
-      } else {
-        const list = parseHtmlToList(txt);
-        if (list.length) return list;
-      }
-    } catch (e) {
-      console.warn("[CTH/resident] GET fetch failed for", url, e);
-    }
-  }
-
-  // POST tries (generally blocked by CSRF; logged for completeness)
-  for (const base of urls) {
-    try {
-      const u = new URL(base, location.origin);
-      const body = new URLSearchParams({ term: query, q: query });
-      console.log("[CTH/resident] FETCH POST:", u.pathname + u.search, "body:", body.toString());
-      const res = await fetch(u.pathname + u.search, {
-        credentials: "include",
-        headers: {
-          "X-Requested-With": "XMLHttpRequest",
-          "Accept": "application/json, text/html;q=0.9,*/*;q=0.8",
-          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
-        },
-        method: "POST",
-        body
-      });
-      const ct = res.headers.get("content-type") || "";
-      const status = res.status;
-      console.log("[CTH/resident] POST status/content-type:", status, ct);
-      const txt = await res.text();
-      console.log("[CTH/resident] POST body preview:", txt.slice(0, 200).replace(/\n/g, "\\n"));
-      if (!res.ok) { tried.push({ url: base, method: "POST", status }); continue; }
-
-      if (/json/i.test(ct)) {
-        const data = JSON.parse(txt);
-        const list = toIdTextListFromJson(data);
-        if (list.length) return list;
-      } else {
-        const list = parseHtmlToList(txt);
-        if (list.length) return list;
-      }
-    } catch (e) {
-      console.warn("[CTH/resident] POST fetch failed for", base, e);
-    }
-  }
-
-  console.warn("[CTH/resident] No results from any endpoint. Tried:", tried);
-  return [];
-}
-
-function pickBest(results, query) {
-  const q = norm(query);
-  // Prefer exact Last, First match if present
-  const exact = results.find(r => norm(r.text) === q);
-  const starts = results.find(r => norm(r.text).startsWith(q));
-  const contains = results.find(r => norm(r.text).includes(q));
-  const best = exact || starts || contains || results[0];
-  console.log("[CTH/resident] pickBest ->", best);
-  return best;
-}
-
-function populateResident({ id, text }) {
+// Type in the visible search box, wait for dropdown, click the best match
+async function uiPickResident(query) {
   const root = residentRoot();
-  const hid = residentHiddenId(root);
-  const flag = residentSelectedFlag(root);
-  console.log("[CTH/resident] populateResident", { id, text, hasHidden: !!hid, hasFlag: !!flag });
 
-  if (!hid) { console.warn("[CTH/resident] hidden [1769][data] not found"); return false; }
+  const box = await waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 });
+  console.log("[CTH/resident] uiPickResident: got search box", box);
 
-  hid.value = String(id); change(hid);
-  if (flag) { flag.value = "1"; change(flag); }
+  // focus + type
+  box.focus();
+  box.value = "";
+  change(box);
+  await sleep(30);
 
-  const vis = residentSearchInput(root); if (vis) { vis.value = text; change(vis); }
-  const disp = residentDisplayContainer(root);
-  if (disp) {
-    disp.innerHTML = "";
-    const a = document.createElement("a");
-    a.href = `/person/${id}/`; a.target = "_blank"; a.textContent = text;
-    disp.appendChild(a);
+  box.value = query;
+  change(box);
+  // Some widgets react only to keyboard events:
+  box.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "a" }));
+  box.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true, key: "a" }));
+  await sleep(120); // let network fire
+
+  // wait for dropdown to appear and settle
+  let items = [];
+  for (let tries = 0; tries < 25; tries++) {
+    items = residentDropdownItems(document).filter(li => (li.textContent || "").trim());
+    if (items.length) break;
+    await sleep(100);
   }
+  console.log("[CTH/resident] uiPickResident: dropdown items:", items.length);
 
-  // Guard against DOM re-renders for 5s
-  const end = Date.now() + 5000;
-  const mo = new MutationObserver(() => {
-    const h = residentHiddenId(root);
-    if (h && h.value !== String(id)) { console.log("[CTH/resident] re-apply hidden id"); h.value = String(id); change(h); }
-    const f = residentSelectedFlag(root);
-    if (f && f.value !== "1") { console.log("[CTH/resident] re-apply selected flag"); f.value = "1"; change(f); }
-  });
-  mo.observe(root, { childList: true, subtree: true });
-  setTimeout(() => mo.disconnect(), Math.max(0, end - Date.now()));
+  if (!items.length) return { ok: false, reason: "no_dropdown_results" };
 
-  return true;
+  // pick best match by substring / startsWith / exact (case-insensitive)
+  const q = norm(query);
+  const scored = items.map(li => {
+    const text = (li.textContent || "").trim();
+    const n = norm(text);
+    let score = 0;
+    if (n === q) score = 100;
+    else if (n.startsWith(q)) score = 80;
+    else if (n.includes(q)) score = 60;
+    // prefer comma-format names
+    if (/,/.test(text)) score += 5;
+    return { li, text, score };
+  }).sort((a, b) => b.score - a.score);
+
+  const pick = scored[0];
+  console.log("[CTH/resident] uiPickResident: best item:", pick?.text, "score:", pick?.score);
+
+  if (!pick || pick.score === 0) return { ok: false, reason: "no_viable_match" };
+
+  // click the item
+  pick.li.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  pick.li.click();
+  pick.li.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  await sleep(120);
+
+  // verify hidden input got set (or the display container updated)
+  const hid = residentHiddenId(root);
+  const disp = residentDisplayContainer(root);
+  const selectedId = hid?.value || "";
+  const selectedText = (disp?.textContent || "").trim();
+
+  console.log("[CTH/resident] uiPickResident verify:", { selectedId, selectedText });
+
+  // minimum verification: either we have an ID or the display text contains our query
+  const ok = !!selectedId || norm(selectedText).includes(q);
+  return ok ? { ok: true, id: selectedId, label: selectedText || pick.text }
+            : { ok: false, reason: "verify_failed", id: selectedId, label: selectedText };
 }
 
 // Prevent overlapping resident lookups
@@ -393,78 +235,26 @@ async function setResidentByName(query) {
   console.log("[CTH/resident] Raw query:", query);
 
   try {
-    // Wait for either the hidden id input OR the visible search box to exist
+    // Wait until either hidden input or the visible search exists
     try {
       await Promise.race([
-        waitFor('input[type="hidden"][name$="[1769][data]"]', { timeout: 12000 }),
-        waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 })
+        waitFor('.student-select-search-bar input[type="text"]', { timeout: 12000 }),
+        waitFor('input[type="hidden"][name*="[1769]"]', { timeout: 12000 }),
       ]);
       console.log("[CTH/resident] Resident controls are present");
     } catch {
       console.warn("[CTH/resident] Resident controls not found after timeout");
     }
 
-    // Clear stale selection
+    // Clear any old selection
     clearResidentUI();
     console.log("[CTH/resident] Cleared old resident selection");
 
-    // Build query variants
-    const variants = (() => {
-      const q = query.trim();
-      if (q.includes(",")) {
-        const [last, firstRaw] = q.split(",").map(s => s.trim());
-        const first = firstRaw?.split(/\s+/)[0] || "";
-        return [q, `${first} ${last}`, last];
-      } else {
-        const parts = q.split(/\s+/);
-        if (parts.length >= 2) {
-          const [first, ...rest] = parts;
-          const last = rest.join(" ");
-          return [`${last}, ${first}`, `${first} ${last}`, last];
-        }
-        return [q];
-      }
-    })();
-    console.log("[CTH/resident] Query variants:", variants);
+    // Drive the UI
+    const res = await uiPickResident(query);
+    console.log("[CTH/resident] uiPickResident result:", res);
 
-    // Try each variant
-    let best = null;
-    for (const v of variants) {
-      console.log("[CTH/resident] Trying variant:", v);
-      const results = await fetchStudentResults(v);
-      console.log("[CTH/resident] API results for", v, ":", results);
-      if (results.length) {
-        best = pickBest(results, v);
-        console.log("[CTH/resident] Picked best match:", best);
-        break;
-      }
-    }
-
-    if (!best) {
-      console.warn("[CTH/resident] No results for any variant");
-      return { ok: false, reason: "no_results" };
-    }
-
-    const ok = populateResident(best);
-    console.log("[CTH/resident] Populated resident fields:", ok);
-    if (!ok) return { ok: false, reason: "populate_failed" };
-
-    // Verify after short settle (in case of DOM swaps)
-    await sleep(150);
-    const hid = residentHiddenId();
-    const flag = residentSelectedFlag();
-    const verified = !!(hid && hid.value === String(best.id) && (!flag || flag.value === "1"));
-
-    console.log("[CTH/resident] Verification check:", {
-      hiddenValue: hid?.value,
-      flagValue: flag?.value,
-      expectedId: best.id,
-      verified
-    });
-
-    return verified
-      ? { ok: true, id: best.id, label: best.text }
-      : { ok: false, reason: "verify_failed" };
+    return res;
 
   } finally {
     console.log("[CTH/resident] === Done resident lookup ===");
